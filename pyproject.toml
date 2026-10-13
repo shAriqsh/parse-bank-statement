@@ -1,0 +1,32 @@
+[project]
+name = "parse-bank-statement"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "google-genai>=2.29.0",
+    "pdfplumber>=0.11.10",
+    "pydantic>=2.14.0",
+    "pytest>=9.1.1",
+    "python-dotenv>=1.2.4",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = [".", "src"]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.14"
+mypy_path = [".", "src"]
+strict = true
+
+[tool.pyright]
+include = [".", "src", "tests"]
+extraPaths = [".", "src"]
+
