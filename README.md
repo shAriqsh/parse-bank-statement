@@ -1,4 +1,4 @@
-# Multimodal Bank Statement Parser & Mathematical Balance Validator
+# Multimodal Bank Statement Parser 
 
 An asynchronous multimodal extraction pipeline and deterministic mathematical verification engine for flattened, scanned, or vector-rasterized bank statements.
 
@@ -10,7 +10,7 @@ Built with **Google GenAI**, **Pydantic v2**, and **pdfplumber**, this library e
 
 - **Multimodal Page-by-Page Extraction**: Rasterizes flattened PDFs into in-memory page images and extracts transactions page-by-page using Google GenAI vision models, avoiding output token truncation on long statements and allowing granular page-level retry recovery.
 - **Controlled Async Concurrency**: Uses an `asyncio.Semaphore` worker pool (configurable concurrency) with automated exponential backoff on HTTP 429 rate limits and transient server errors.
-- **Strict Schema Enforcement**: Extracts typed data (date, narration, cheque/reference number, withdrawal, deposit, and running balance) directly into Pydantic models without manual or fragile JSON parsing.
+- **Strict Schema Enforcement**: Extracts typed data directly into Pydantic models without manual or fragile JSON parsing.
 - **Narration Merging**: Automatically consolidates wrapped, multi-line transaction particulars, remarks, and reference lines into a single coherent narration string.
 - **Header & Footer Filtering**: Automatically skips recurring table headers, metadata footers, and carry-forward balances (such as "Brought Forward" or "Balance B/F") to isolate actual financial movements.
 - **Deterministic Balance Validation**: Mathematically audits every consecutive transaction using the accounting formula:
