@@ -1,7 +1,15 @@
 from decimal import Decimal
+from pathlib import Path
+from typing import Literal
 from pydantic import BaseModel, Field
 
-__all__ = ["Discrepancy", "Transaction", "ValidationResult"]
+__all__ = [
+    "BatchValidationResult",
+    "Discrepancy",
+    "StatementResult",
+    "Transaction",
+    "ValidationResult",
+]
 
 
 class Discrepancy(BaseModel):
@@ -32,3 +40,25 @@ class ValidationResult(BaseModel):
     total_deposits: Decimal
     discrepancies: list[Transaction]
     is_valid: bool
+
+
+class StatementResult(BaseModel):
+    """Result of processing an individual statement PDF within a batch."""
+
+    pdf_path: Path
+    status: Literal["success", "failed"]
+    result: ValidationResult | None = None
+    error: str | None = None
+
+
+class BatchValidationResult(BaseModel):
+    """Aggregated validation results and financial metrics across a batch of statements."""
+
+    total_statements: int
+    successful_count: int
+    failed_count: int
+    cumulative_withdrawals: Decimal
+    cumulative_deposits: Decimal
+    total_discrepancies: int
+    is_valid: bool
+    statements: list[StatementResult]

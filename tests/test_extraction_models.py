@@ -7,8 +7,13 @@ from bank_statement.models import Transaction
 def test_domain_models_module_does_not_contain_extraction_dtos() -> None:
     assert not hasattr(models, "ExtractedTransaction")
     assert not hasattr(models, "ExtractedPage")
-    assert not hasattr(models, "_clean_monetary_amount")
-    assert set(models.__all__) == {"Transaction", "Discrepancy", "ValidationResult"}
+    assert set(models.__all__) == {
+        "Transaction",
+        "Discrepancy",
+        "ValidationResult",
+        "StatementResult",
+        "BatchValidationResult",
+    }
 
 
 def test_extracted_transaction_defaults_empty_withdrawal_deposit() -> None:

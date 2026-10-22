@@ -4,8 +4,8 @@ from typing import Any
 from unittest.mock import MagicMock
 import pytest
 from bank_statement.extractor import ExtractedPage, ExtractedTransaction
-from bank_statement.models import Transaction, ValidationResult
-from bank_statement.orchestrator import parse_statement
+from bank_statement.models import BatchValidationResult, Transaction, ValidationResult
+from bank_statement.orchestrator import parse_batch_statements, parse_statement
 
 
 @pytest.mark.anyio
@@ -152,3 +152,164 @@ async def test_parse_statement_full_pdf_integration_with_real_pdf() -> None:
     assert result.total_deposits == Decimal("10000.00")
     assert result.transactions[-1].running_balance == Decimal("7000.00")
     assert len(result.discrepancies) == 0
+
+
+@pytest.mark.anyio
+async def test_parse_batch_statements_aggregates_multiple_statements_with_isolated_baselines() -> None:
+    async def multi_statement_extractor(path: str | Path, **kwargs: object) -> list[Transaction]:
+        str_path = str(path)
+        if "statement_1.pdf" in str_path:
+            return [
+                Transaction(
+                    date="01-01-2024",
+                    narration="ACCT 1 OPENING",
+                    withdrawal=Decimal("0.00"),
+                    deposit=Decimal("5000.00"),
+                    running_balance=Decimal("5000.00"),
+                ),
+                Transaction(
+                    date="02-01-2024",
+                    narration="ACCT 1 WITHDRAWAL",
+                    withdrawal=Decimal("1000.00"),
+                    deposit=Decimal("0.00"),
+                    running_balance=Decimal("4000.00"),
+                ),
+            ]
+        elif "statement_2.pdf" in str_path:
+            return [
+                Transaction(
+                    date="01-02-2024",
+                    narration="ACCT 2 OPENING",
+                    withdrawal=Decimal("0.00"),
+                    deposit=Decimal("100000.00"),
+                    running_balance=Decimal("100000.00"),
+                ),
+                Transaction(
+                    date="05-02-2024",
+                    narration="ACCT 2 DEPOSIT",
+                    withdrawal=Decimal("0.00"),
+                    deposit=Decimal("20000.00"),
+                    running_balance=Decimal("120000.00"),
+                ),
+            ]
+        return []
+
+    batch_result = await parse_batch_statements(
+        ["statement_1.pdf", Path("statement_2.pdf")],
+        extractor=multi_statement_extractor,
+    )
+
+    assert isinstance(batch_result, BatchValidationResult)
+    assert batch_result.total_statements == 2
+    assert batch_result.successful_count == 2
+    assert batch_result.failed_count == 0
+    assert batch_result.is_valid is True
+    assert batch_result.total_discrepancies == 0
+    assert batch_result.cumulative_withdrawals == Decimal("1000.00")
+    assert batch_result.cumulative_deposits == Decimal("125000.00")
+    assert len(batch_result.statements) == 2
+    assert batch_result.statements[0].status == "success"
+    assert batch_result.statements[1].status == "success"
+
+
+@pytest.mark.anyio
+async def test_parse_batch_statements_fault_isolation_on_error() -> None:
+    async def faulty_batch_extractor(path: str | Path, **kwargs: object) -> list[Transaction]:
+        str_path = str(path)
+        if "bad.pdf" in str_path:
+            raise ValueError("Corrupt PDF stream")
+        elif "with_error.pdf" in str_path:
+            return [
+                Transaction(
+                    date="01-01-2024",
+                    narration="OPENING",
+                    withdrawal=Decimal("0.00"),
+                    deposit=Decimal("100.00"),
+                    running_balance=Decimal("100.00"),
+                ),
+                Transaction(
+                    date="02-01-2024",
+                    narration="WRONG BALANCE",
+                    withdrawal=Decimal("20.00"),
+                    deposit=Decimal("0.00"),
+                    running_balance=Decimal("50.00"),  # Expected: 80.00 -> discrepancy
+                ),
+            ]
+        return [
+            Transaction(
+                date="01-01-2024",
+                narration="CLEAN",
+                withdrawal=Decimal("10.00"),
+                deposit=Decimal("0.00"),
+                running_balance=Decimal("90.00"),
+            )
+        ]
+
+    batch_result = await parse_batch_statements(
+        ["clean.pdf", "bad.pdf", "with_error.pdf"],
+        extractor=faulty_batch_extractor,
+    )
+
+    assert batch_result.total_statements == 3
+    assert batch_result.successful_count == 2
+    assert batch_result.failed_count == 1
+    assert batch_result.total_discrepancies == 1
+    assert batch_result.is_valid is False
+    assert batch_result.statements[0].status == "success"
+    assert batch_result.statements[1].status == "failed"
+    assert batch_result.statements[1].error == "Corrupt PDF stream"
+    assert batch_result.statements[1].result is None
+    assert batch_result.statements[2].status == "success"
+    assert batch_result.statements[2].result is not None
+    assert len(batch_result.statements[2].result.discrepancies) == 1
+
+
+@pytest.mark.anyio
+async def test_parse_batch_statements_empty_input() -> None:
+    batch_result = await parse_batch_statements([])
+
+    assert batch_result.total_statements == 0
+    assert batch_result.successful_count == 0
+    assert batch_result.failed_count == 0
+    assert batch_result.cumulative_withdrawals == Decimal("0.00")
+    assert batch_result.cumulative_deposits == Decimal("0.00")
+    assert batch_result.total_discrepancies == 0
+    assert batch_result.is_valid is True
+    assert batch_result.statements == []
+
+
+@pytest.mark.anyio
+async def test_parse_batch_statements_forwards_parameters() -> None:
+    calls: list[dict[str, Any]] = []
+    mock_client = MagicMock()
+
+    async def capturing_extractor(path: str | Path, **kwargs: Any) -> list[Transaction]:
+        calls.append({"path": path, **kwargs})
+        return [
+            Transaction(
+                date="01-01-2024",
+                narration="OPENING",
+                withdrawal=Decimal("0.00"),
+                deposit=Decimal("100.00"),
+                running_balance=Decimal("100.00"),
+            )
+        ]
+
+    batch_result = await parse_batch_statements(
+        ["s1.pdf", "s2.pdf"],
+        client=mock_client,
+        max_concurrency=4,
+        max_retries=2,
+        retry_base_delay=0.25,
+        extractor=capturing_extractor,
+        custom_flag=True,
+    )
+
+    assert batch_result.is_valid is True
+    assert len(calls) == 2
+    for call in calls:
+        assert call["client"] is mock_client
+        assert call["max_concurrency"] == 4
+        assert call["max_retries"] == 2
+        assert call["retry_base_delay"] == 0.25
+        assert call["custom_flag"] is True
