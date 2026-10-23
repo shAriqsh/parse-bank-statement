@@ -1,7 +1,11 @@
 import json
 from pathlib import Path
 from typing import Any
-from bank_statement.models import Transaction, ValidationResult
+from bank_statement.models import (
+    BatchValidationResult,
+    Transaction,
+    ValidationResult,
+)
 
 
 def _transaction_to_dict(tx: Transaction) -> dict[str, Any]:
@@ -25,6 +29,21 @@ def _transaction_to_dict(tx: Transaction) -> dict[str, Any]:
     }
 
 
+def _validation_result_to_dict(result: ValidationResult) -> dict[str, Any]:
+    """Serialize a ValidationResult into JSON-compatible summary, transactions, and discrepancies."""
+    return {
+        "summary": {
+            "total_withdrawals": f"{result.total_withdrawals:.2f}",
+            "total_deposits": f"{result.total_deposits:.2f}",
+            "transaction_count": len(result.transactions),
+            "discrepancy_count": len(result.discrepancies),
+            "is_valid": result.is_valid,
+        },
+        "transactions": [_transaction_to_dict(tx) for tx in result.transactions],
+        "discrepancies": [_transaction_to_dict(tx) for tx in result.discrepancies],
+    }
+
+
 def export_transactions_json(
     result: ValidationResult,
     output_path: str | Path,
@@ -37,20 +56,67 @@ def export_transactions_json(
     """
     target = Path(output_path)
     target.parent.mkdir(parents=True, exist_ok=True)
+    payload = _validation_result_to_dict(result)
+    target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def export_batch_json(
+    batch_result: BatchValidationResult,
+    output_path: str | Path,
+    output_dir: str | Path | None = None,
+) -> None:
+    """Export consolidated batch validation results and optional per-statement JSON files.
+
+    Args:
+        batch_result: BatchValidationResult instance produced by the batch orchestrator.
+        output_path: Target path for the consolidated batch JSON report.
+        output_dir: Optional directory to write individual <statement_stem>_transactions.json files.
+    """
+    target = Path(output_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    statements_list: list[dict[str, Any]] = []
+    for stmt in batch_result.statements:
+        if stmt.status == "success" and stmt.result is not None:
+            stmt_dict: dict[str, Any] = {
+                "pdf_path": str(stmt.pdf_path),
+                "status": stmt.status,
+                **_validation_result_to_dict(stmt.result),
+                "error": None,
+            }
+        else:
+            stmt_dict = {
+                "pdf_path": str(stmt.pdf_path),
+                "status": stmt.status,
+                "summary": None,
+                "transactions": [],
+                "discrepancies": [],
+                "error": stmt.error,
+            }
+        statements_list.append(stmt_dict)
 
     payload = {
-        "summary": {
-            "total_withdrawals": f"{result.total_withdrawals:.2f}",
-            "total_deposits": f"{result.total_deposits:.2f}",
-            "transaction_count": len(result.transactions),
-            "discrepancy_count": len(result.discrepancies),
-            "is_valid": result.is_valid,
+        "batch_summary": {
+            "total_statements": batch_result.total_statements,
+            "successful_count": batch_result.successful_count,
+            "failed_count": batch_result.failed_count,
+            "cumulative_withdrawals": f"{batch_result.cumulative_withdrawals:.2f}",
+            "cumulative_deposits": f"{batch_result.cumulative_deposits:.2f}",
+            "total_discrepancies": batch_result.total_discrepancies,
+            "is_valid": batch_result.is_valid,
         },
-        "transactions": [_transaction_to_dict(tx) for tx in result.transactions],
-        "discrepancies": [_transaction_to_dict(tx) for tx in result.discrepancies],
+        "statements": statements_list,
     }
 
     target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    if output_dir is not None:
+        dir_target = Path(output_dir)
+        dir_target.mkdir(parents=True, exist_ok=True)
+        for stmt in batch_result.statements:
+            if stmt.status == "success" and stmt.result is not None:
+                individual_target = dir_target / f"{stmt.pdf_path.stem}_transactions.json"
+                export_transactions_json(stmt.result, individual_target)
 
 
 def format_cli_summary(result: ValidationResult) -> str:

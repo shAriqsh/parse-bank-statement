@@ -4,7 +4,11 @@ from pathlib import Path
 from typing import Sequence
 from bank_statement.config import get_gemini_client
 from bank_statement.orchestrator import parse_batch_statements, parse_statement
-from bank_statement.reporter import export_transactions_json, format_cli_summary
+from bank_statement.reporter import (
+    export_batch_json,
+    export_transactions_json,
+    format_cli_summary,
+)
 
 
 def resolve_pdf_paths(inputs: Sequence[str | Path]) -> list[Path]:
@@ -12,7 +16,7 @@ def resolve_pdf_paths(inputs: Sequence[str | Path]) -> list[Path]:
 
     - Existing files are validated and appended.
     - Existing directories are scanned non-recursively for '*.pdf' files (case-insensitive)
-      and sorted alphabetically.
+    - and sorted alphabetically.
     - If a path does not exist, raises FileNotFoundError.
     - If a directory contains zero PDF files, raises ValueError.
     """
@@ -52,6 +56,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Path to export the structured JSON artifact (default: transactions.json)",
     )
     parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Optional directory to export individual per-statement JSON files (<statement_stem>_transactions.json)",
+    )
+    parser.add_argument(
         "-c",
         "--concurrency",
         type=int,
@@ -65,6 +74,7 @@ async def run_pipeline(
     pdf_paths: Sequence[str | Path] | str | Path,
     output_path: str | Path = "transactions.json",
     concurrency: int = 5,
+    output_dir: str | Path | None = None,
 ) -> int:
     """Execute the asynchronous multimodal parsing, validation, export, and reporting pipeline."""
     inputs: Sequence[str | Path]
@@ -84,11 +94,16 @@ async def run_pipeline(
     if len(resolved) == 1:
         result = await parse_statement(resolved[0], client=client, max_concurrency=concurrency)
         export_transactions_json(result, output_path)
+        if output_dir is not None:
+            dir_target = Path(output_dir)
+            dir_target.mkdir(parents=True, exist_ok=True)
+            export_transactions_json(result, dir_target / f"{resolved[0].stem}_transactions.json")
         summary_output = format_cli_summary(result)
         print(summary_output)
         return 0
 
-    await parse_batch_statements(resolved, client=client, max_concurrency=concurrency)
+    batch_result = await parse_batch_statements(resolved, client=client, max_concurrency=concurrency)
+    export_batch_json(batch_result, output_path=output_path, output_dir=output_dir)
     return 0
 
 
@@ -104,5 +119,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             pdf_paths=pdf_inputs,
             output_path=args.output,
             concurrency=args.concurrency,
+            output_dir=args.output_dir,
         )
     )

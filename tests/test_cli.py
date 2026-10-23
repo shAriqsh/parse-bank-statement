@@ -6,7 +6,13 @@ from typing import Any
 from unittest.mock import MagicMock
 import pytest
 from bank_statement.cli import main, resolve_pdf_paths
-from bank_statement.models import Discrepancy, Transaction, ValidationResult
+from bank_statement.models import (
+    BatchValidationResult,
+    Discrepancy,
+    StatementResult,
+    Transaction,
+    ValidationResult,
+)
 
 
 @pytest.fixture
@@ -225,12 +231,19 @@ def test_main_multiple_pdf_arguments_passes_to_batch_pipeline(
 
     batch_called_with: list[Path] = []
 
-    async def mock_batch(paths: Any, **kwargs: object) -> MagicMock:
+    async def mock_batch(paths: Any, **kwargs: object) -> BatchValidationResult:
         nonlocal batch_called_with
         batch_called_with = list(paths)
-        mock_res = MagicMock()
-        mock_res.is_valid = True
-        return mock_res
+        return BatchValidationResult(
+            total_statements=len(batch_called_with),
+            successful_count=len(batch_called_with),
+            failed_count=0,
+            cumulative_withdrawals=Decimal("0.00"),
+            cumulative_deposits=Decimal("0.00"),
+            total_discrepancies=0,
+            is_valid=True,
+            statements=[],
+        )
 
     monkeypatch.setattr("bank_statement.cli.parse_batch_statements", mock_batch)
 
@@ -253,12 +266,19 @@ def test_main_directory_argument_discovers_pdfs_and_runs_batch(
 
     batch_called_with: list[Path] = []
 
-    async def mock_batch(paths: Any, **kwargs: object) -> MagicMock:
+    async def mock_batch(paths: Any, **kwargs: object) -> BatchValidationResult:
         nonlocal batch_called_with
         batch_called_with = list(paths)
-        mock_res = MagicMock()
-        mock_res.is_valid = True
-        return mock_res
+        return BatchValidationResult(
+            total_statements=len(batch_called_with),
+            successful_count=len(batch_called_with),
+            failed_count=0,
+            cumulative_withdrawals=Decimal("0.00"),
+            cumulative_deposits=Decimal("0.00"),
+            total_discrepancies=0,
+            is_valid=True,
+            statements=[],
+        )
 
     monkeypatch.setattr("bank_statement.cli.parse_batch_statements", mock_batch)
 
@@ -341,3 +361,210 @@ def test_main_default_argument_uses_account_pdf(
     exit_code = main([])
     assert exit_code == 0
     assert called_with == ["account.pdf"]
+
+
+def test_main_single_pdf_preserves_single_statement_json_backward_compatibility(
+    tmp_path: Path,
+    mock_pipeline: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_json = tmp_path / "custom_transactions.json"
+    dummy_pdf = tmp_path / "single.pdf"
+    dummy_pdf.write_bytes(b"%PDF dummy")
+
+    sample_tx = Transaction(
+        date="01-01-2024",
+        narration="SALARY",
+        withdrawal=Decimal("0.00"),
+        deposit=Decimal("5000.00"),
+        running_balance=Decimal("5000.00"),
+    )
+
+    async def mock_parse_stmt(pdf_path: object, **kwargs: object) -> ValidationResult:
+        return ValidationResult(
+            transactions=[sample_tx],
+            total_withdrawals=Decimal("0.00"),
+            total_deposits=Decimal("5000.00"),
+            discrepancies=[],
+            is_valid=True,
+        )
+
+    monkeypatch.setattr("bank_statement.cli.parse_statement", mock_parse_stmt)
+
+    exit_code = main([str(dummy_pdf), "--output", str(output_json)])
+    assert exit_code == 0
+
+    assert output_json.exists()
+    data = json.loads(output_json.read_text(encoding="utf-8"))
+
+    # Assert backward-compatible schema (summary, transactions, discrepancies)
+    assert "summary" in data
+    assert "transactions" in data
+    assert "discrepancies" in data
+    assert "batch_summary" not in data
+    assert data["summary"]["total_deposits"] == "5000.00"
+    assert data["summary"]["transaction_count"] == 1
+
+
+def test_main_single_pdf_with_output_dir_writes_individual_json(
+    tmp_path: Path,
+    mock_pipeline: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_json = tmp_path / "transactions.json"
+    out_dir = tmp_path / "individual_out"
+    dummy_pdf = tmp_path / "my_statement.pdf"
+    dummy_pdf.write_bytes(b"%PDF dummy")
+
+    sample_tx = Transaction(
+        date="05-01-2024",
+        narration="CONSULTING FEE",
+        withdrawal=Decimal("0.00"),
+        deposit=Decimal("3000.00"),
+        running_balance=Decimal("3000.00"),
+    )
+
+    async def mock_parse_stmt(pdf_path: object, **kwargs: object) -> ValidationResult:
+        return ValidationResult(
+            transactions=[sample_tx],
+            total_withdrawals=Decimal("0.00"),
+            total_deposits=Decimal("3000.00"),
+            discrepancies=[],
+            is_valid=True,
+        )
+
+    monkeypatch.setattr("bank_statement.cli.parse_statement", mock_parse_stmt)
+
+    exit_code = main([
+        str(dummy_pdf),
+        "--output",
+        str(output_json),
+        "--output-dir",
+        str(out_dir),
+    ])
+    assert exit_code == 0
+
+    # Main output file exists and has single-statement schema
+    assert output_json.exists()
+    main_data = json.loads(output_json.read_text(encoding="utf-8"))
+    assert main_data["summary"]["total_deposits"] == "3000.00"
+
+    # Per-statement file written to output_dir
+    individual_file = out_dir / "my_statement_transactions.json"
+    assert individual_file.exists()
+    indiv_data = json.loads(individual_file.read_text(encoding="utf-8"))
+    assert indiv_data["summary"]["total_deposits"] == "3000.00"
+    assert len(indiv_data["transactions"]) == 1
+
+
+def test_main_multi_pdf_writes_consolidated_batch_json(
+    tmp_path: Path,
+    mock_pipeline: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_json = tmp_path / "batch_out.json"
+    f1 = tmp_path / "jan.pdf"
+    f2 = tmp_path / "feb.pdf"
+    f1.write_bytes(b"%PDF 1")
+    f2.write_bytes(b"%PDF 2")
+
+    res1 = ValidationResult(
+        transactions=[],
+        total_withdrawals=Decimal("100.00"),
+        total_deposits=Decimal("200.00"),
+        discrepancies=[],
+        is_valid=True,
+    )
+    stmt1 = StatementResult(pdf_path=f1, status="success", result=res1, error=None)
+    stmt2 = StatementResult(pdf_path=f2, status="failed", result=None, error="Corrupt")
+
+    batch_res = BatchValidationResult(
+        total_statements=2,
+        successful_count=1,
+        failed_count=1,
+        cumulative_withdrawals=Decimal("100.00"),
+        cumulative_deposits=Decimal("200.00"),
+        total_discrepancies=0,
+        is_valid=False,
+        statements=[stmt1, stmt2],
+    )
+
+    async def mock_batch(*args: object, **kwargs: object) -> BatchValidationResult:
+        return batch_res
+
+    monkeypatch.setattr("bank_statement.cli.parse_batch_statements", mock_batch)
+
+    exit_code = main([str(f1), str(f2), "-o", str(output_json)])
+    assert exit_code == 0
+
+    assert output_json.exists()
+    data = json.loads(output_json.read_text(encoding="utf-8"))
+    assert "batch_summary" in data
+    assert data["batch_summary"]["total_statements"] == 2
+    assert data["batch_summary"]["successful_count"] == 1
+    assert data["batch_summary"]["cumulative_withdrawals"] == "100.00"
+    assert len(data["statements"]) == 2
+    assert data["statements"][0]["pdf_path"] == str(f1)
+    assert data["statements"][0]["status"] == "success"
+    assert data["statements"][1]["status"] == "failed"
+
+
+def test_main_multi_pdf_with_output_dir_writes_individual_statement_files(
+    tmp_path: Path,
+    mock_pipeline: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_json = tmp_path / "batch.json"
+    out_dir = tmp_path / "per_statement_exports"
+    f1 = tmp_path / "stmt_a.pdf"
+    f2 = tmp_path / "stmt_b.pdf"
+    f1.write_bytes(b"%PDF a")
+    f2.write_bytes(b"%PDF b")
+
+    tx_a = Transaction(
+        date="10-01-2024",
+        narration="TX A",
+        withdrawal=Decimal("50.00"),
+        deposit=Decimal("0.00"),
+        running_balance=Decimal("950.00"),
+    )
+    res_a = ValidationResult(
+        transactions=[tx_a],
+        total_withdrawals=Decimal("50.00"),
+        total_deposits=Decimal("0.00"),
+        discrepancies=[],
+        is_valid=True,
+    )
+    stmt_a = StatementResult(pdf_path=f1, status="success", result=res_a, error=None)
+    stmt_b = StatementResult(pdf_path=f2, status="failed", result=None, error="Parsing error")
+
+    batch_res = BatchValidationResult(
+        total_statements=2,
+        successful_count=1,
+        failed_count=1,
+        cumulative_withdrawals=Decimal("50.00"),
+        cumulative_deposits=Decimal("0.00"),
+        total_discrepancies=0,
+        is_valid=False,
+        statements=[stmt_a, stmt_b],
+    )
+
+    async def mock_batch(*args: object, **kwargs: object) -> BatchValidationResult:
+        return batch_res
+
+    monkeypatch.setattr("bank_statement.cli.parse_batch_statements", mock_batch)
+
+    exit_code = main([
+        str(f1),
+        str(f2),
+        "-o",
+        str(output_json),
+        "--output-dir",
+        str(out_dir),
+    ])
+    assert exit_code == 0
+
+    assert output_json.exists()
+    assert (out_dir / "stmt_a_transactions.json").exists()
+    assert not (out_dir / "stmt_b_transactions.json").exists()
+
