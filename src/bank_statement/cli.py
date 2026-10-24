@@ -7,6 +7,7 @@ from bank_statement.orchestrator import parse_batch_statements, parse_statement
 from bank_statement.reporter import (
     export_batch_json,
     export_transactions_json,
+    format_batch_cli_summary,
     format_cli_summary,
 )
 
@@ -104,7 +105,9 @@ async def run_pipeline(
 
     batch_result = await parse_batch_statements(resolved, client=client, max_concurrency=concurrency)
     export_batch_json(batch_result, output_path=output_path, output_dir=output_dir)
-    return 0
+    summary_output = format_batch_cli_summary(batch_result)
+    print(summary_output)
+    return 0 if batch_result.is_valid else 1
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -12,6 +12,7 @@ from bank_statement.models import (
 from bank_statement.reporter import (
     export_batch_json,
     export_transactions_json,
+    format_batch_cli_summary,
     format_cli_summary,
 )
 
@@ -294,4 +295,164 @@ def test_export_batch_json_writes_individual_files_to_output_dir(tmp_path: Path)
     # Failed statement should NOT have generated an individual file
     fail_file = out_dir / "q2_broken_transactions.json"
     assert not fail_file.exists()
+
+
+def test_format_batch_cli_summary_clean_batch() -> None:
+    tx1 = Transaction(
+        date="01-01-2024",
+        narration="SALARY",
+        withdrawal=Decimal("0.00"),
+        deposit=Decimal("5000.00"),
+        running_balance=Decimal("5000.00"),
+    )
+    res1 = ValidationResult(
+        transactions=[tx1],
+        total_withdrawals=Decimal("0.00"),
+        total_deposits=Decimal("5000.00"),
+        discrepancies=[],
+        is_valid=True,
+    )
+    stmt1 = StatementResult(
+        pdf_path=Path("january.pdf"),
+        status="success",
+        result=res1,
+        error=None,
+    )
+    tx2 = Transaction(
+        date="01-02-2024",
+        narration="DIVIDEND",
+        withdrawal=Decimal("200.00"),
+        deposit=Decimal("1000.00"),
+        running_balance=Decimal("5800.00"),
+    )
+    res2 = ValidationResult(
+        transactions=[tx2],
+        total_withdrawals=Decimal("200.00"),
+        total_deposits=Decimal("1000.00"),
+        discrepancies=[],
+        is_valid=True,
+    )
+    stmt2 = StatementResult(
+        pdf_path=Path("february.pdf"),
+        status="success",
+        result=res2,
+        error=None,
+    )
+    batch_res = BatchValidationResult(
+        total_statements=2,
+        successful_count=2,
+        failed_count=0,
+        cumulative_withdrawals=Decimal("200.00"),
+        cumulative_deposits=Decimal("6000.00"),
+        total_discrepancies=0,
+        is_valid=True,
+        statements=[stmt1, stmt2],
+    )
+
+    summary = format_batch_cli_summary(batch_res)
+
+    assert "BATCH STATEMENT SUMMARY" in summary
+    assert "Total Statements:        2" in summary
+    assert "Cumulative Withdrawals:  INR 200.00" in summary
+    assert "Cumulative Deposits:     INR 6,000.00" in summary
+    assert "Total Discrepancies:     0" in summary
+    assert "Validation Status:       VERIFIED" in summary
+    assert "january.pdf" in summary
+    assert "february.pdf" in summary
+    assert "DISCREPANCY DIAGNOSTICS" not in summary
+
+
+def test_format_batch_cli_summary_with_discrepancies_and_failures() -> None:
+    tx_err = Transaction(
+        date="15-01-2024",
+        narration="ONLINE SHOPPING #123",
+        withdrawal=Decimal("150.00"),
+        deposit=Decimal("0.00"),
+        running_balance=Decimal("4850.00"),
+        discrepancy=Discrepancy(
+            expected_balance=Decimal("4800.00"),
+            stated_balance=Decimal("4850.00"),
+            delta=Decimal("50.00"),
+        ),
+    )
+    res_err = ValidationResult(
+        transactions=[tx_err],
+        total_withdrawals=Decimal("150.00"),
+        total_deposits=Decimal("0.00"),
+        discrepancies=[tx_err],
+        is_valid=False,
+    )
+    stmt_err = StatementResult(
+        pdf_path=Path("online_shopping.pdf"),
+        status="success",
+        result=res_err,
+        error=None,
+    )
+
+    tx_ok = Transaction(
+        date="10-02-2024",
+        narration="INTEREST",
+        withdrawal=Decimal("0.00"),
+        deposit=Decimal("50.00"),
+        running_balance=Decimal("50.00"),
+    )
+    res_ok = ValidationResult(
+        transactions=[tx_ok],
+        total_withdrawals=Decimal("0.00"),
+        total_deposits=Decimal("50.00"),
+        discrepancies=[],
+        is_valid=True,
+    )
+    stmt_ok = StatementResult(
+        pdf_path=Path("dividend.pdf"),
+        status="success",
+        result=res_ok,
+        error=None,
+    )
+
+    stmt_failed = StatementResult(
+        pdf_path=Path("corrupt.pdf"),
+        status="failed",
+        result=None,
+        error="Corrupted PDF trailer structure",
+    )
+
+    batch_res = BatchValidationResult(
+        total_statements=3,
+        successful_count=2,
+        failed_count=1,
+        cumulative_withdrawals=Decimal("150.00"),
+        cumulative_deposits=Decimal("50.00"),
+        total_discrepancies=1,
+        is_valid=False,
+        statements=[stmt_err, stmt_ok, stmt_failed],
+    )
+
+    summary = format_batch_cli_summary(batch_res)
+
+    # High-level overview assertions
+    assert "FAILED / DISCREPANCIES DETECTED" in summary
+    assert "Total Statements:        3 (Passed: 2, Failed: 1)" in summary
+
+    # Table assertions
+    assert "online_shopping.pdf" in summary
+    assert "DISCREPANCIES" in summary
+    assert "dividend.pdf" in summary
+    assert "corrupt.pdf" in summary
+    assert "FAILED" in summary
+
+    # Targeted discrepancy diagnostic table
+    assert "DISCREPANCY DIAGNOSTICS: online_shopping.pdf" in summary
+    assert "ONLINE SHOPPING #123" in summary
+    assert "4850.00" in summary
+    assert "4800.00" in summary
+    assert "+50.00" in summary
+    # dividend.pdf had no discrepancies, so no diagnostic header for it
+    assert "DISCREPANCY DIAGNOSTICS: dividend.pdf" not in summary
+
+    # Failed statements highlighted
+    assert "FAILED STATEMENTS" in summary
+    assert "corrupt.pdf: Corrupted PDF trailer structure" in summary
+
+
 

@@ -495,7 +495,7 @@ def test_main_multi_pdf_writes_consolidated_batch_json(
     monkeypatch.setattr("bank_statement.cli.parse_batch_statements", mock_batch)
 
     exit_code = main([str(f1), str(f2), "-o", str(output_json)])
-    assert exit_code == 0
+    assert exit_code == 1
 
     assert output_json.exists()
     data = json.loads(output_json.read_text(encoding="utf-8"))
@@ -562,9 +562,185 @@ def test_main_multi_pdf_with_output_dir_writes_individual_statement_files(
         "--output-dir",
         str(out_dir),
     ])
-    assert exit_code == 0
+    assert exit_code == 1
 
     assert output_json.exists()
     assert (out_dir / "stmt_a_transactions.json").exists()
     assert not (out_dir / "stmt_b_transactions.json").exists()
+
+
+def test_main_batch_clean_prints_summary_and_exits_0(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    mock_pipeline: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    f1 = tmp_path / "stmt_1.pdf"
+    f2 = tmp_path / "stmt_2.pdf"
+    f1.write_bytes(b"%PDF 1")
+    f2.write_bytes(b"%PDF 2")
+
+    tx1 = Transaction(
+        date="01-01-2024",
+        narration="TX 1",
+        withdrawal=Decimal("100.00"),
+        deposit=Decimal("0.00"),
+        running_balance=Decimal("900.00"),
+    )
+    res1 = ValidationResult(
+        transactions=[tx1],
+        total_withdrawals=Decimal("100.00"),
+        total_deposits=Decimal("0.00"),
+        discrepancies=[],
+        is_valid=True,
+    )
+    stmt1 = StatementResult(pdf_path=f1, status="success", result=res1, error=None)
+    stmt2 = StatementResult(pdf_path=f2, status="success", result=res1, error=None)
+
+    batch_res = BatchValidationResult(
+        total_statements=2,
+        successful_count=2,
+        failed_count=0,
+        cumulative_withdrawals=Decimal("200.00"),
+        cumulative_deposits=Decimal("0.00"),
+        total_discrepancies=0,
+        is_valid=True,
+        statements=[stmt1, stmt2],
+    )
+
+    async def mock_batch(*args: object, **kwargs: object) -> BatchValidationResult:
+        return batch_res
+
+    monkeypatch.setattr("bank_statement.cli.parse_batch_statements", mock_batch)
+
+    exit_code = main([str(f1), str(f2)])
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "BATCH STATEMENT SUMMARY" in captured.out
+    assert "Validation Status:       VERIFIED" in captured.out
+    assert "stmt_1.pdf" in captured.out
+    assert "stmt_2.pdf" in captured.out
+    assert "DISCREPANCY DIAGNOSTICS" not in captured.out
+
+
+def test_main_batch_with_discrepancies_prints_diagnostics_and_exits_1(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    mock_pipeline: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    f1 = tmp_path / "clean.pdf"
+    f2 = tmp_path / "mismatch.pdf"
+    f1.write_bytes(b"%PDF 1")
+    f2.write_bytes(b"%PDF 2")
+
+    res_clean = ValidationResult(
+        transactions=[],
+        total_withdrawals=Decimal("0.00"),
+        total_deposits=Decimal("0.00"),
+        discrepancies=[],
+        is_valid=True,
+    )
+    stmt_clean = StatementResult(pdf_path=f1, status="success", result=res_clean, error=None)
+
+    tx_mismatch = Transaction(
+        date="15-02-2024",
+        narration="DISCREPANT TRANSACTION",
+        withdrawal=Decimal("200.00"),
+        deposit=Decimal("0.00"),
+        running_balance=Decimal("800.00"),
+        discrepancy=Discrepancy(
+            expected_balance=Decimal("850.00"),
+            stated_balance=Decimal("800.00"),
+            delta=Decimal("-50.00"),
+        ),
+    )
+    res_mismatch = ValidationResult(
+        transactions=[tx_mismatch],
+        total_withdrawals=Decimal("200.00"),
+        total_deposits=Decimal("0.00"),
+        discrepancies=[tx_mismatch],
+        is_valid=False,
+    )
+    stmt_mismatch = StatementResult(pdf_path=f2, status="success", result=res_mismatch, error=None)
+
+    batch_res = BatchValidationResult(
+        total_statements=2,
+        successful_count=2,
+        failed_count=0,
+        cumulative_withdrawals=Decimal("200.00"),
+        cumulative_deposits=Decimal("0.00"),
+        total_discrepancies=1,
+        is_valid=False,
+        statements=[stmt_clean, stmt_mismatch],
+    )
+
+    async def mock_batch(*args: object, **kwargs: object) -> BatchValidationResult:
+        return batch_res
+
+    monkeypatch.setattr("bank_statement.cli.parse_batch_statements", mock_batch)
+
+    exit_code = main([str(f1), str(f2)])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "BATCH STATEMENT SUMMARY" in captured.out
+    assert "FAILED / DISCREPANCIES DETECTED" in captured.out
+    assert "DISCREPANCY DIAGNOSTICS: mismatch.pdf" in captured.out
+    assert "DISCREPANT TRANSACTION" in captured.out
+    assert "DISCREPANCY DIAGNOSTICS: clean.pdf" not in captured.out
+
+
+def test_main_batch_with_failed_statement_prints_error_and_exits_1(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    mock_pipeline: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    f1 = tmp_path / "valid.pdf"
+    f2 = tmp_path / "damaged.pdf"
+    f1.write_bytes(b"%PDF 1")
+    f2.write_bytes(b"%PDF 2")
+
+    res_valid = ValidationResult(
+        transactions=[],
+        total_withdrawals=Decimal("0.00"),
+        total_deposits=Decimal("0.00"),
+        discrepancies=[],
+        is_valid=True,
+    )
+    stmt_valid = StatementResult(pdf_path=f1, status="success", result=res_valid, error=None)
+    stmt_damaged = StatementResult(
+        pdf_path=f2,
+        status="failed",
+        result=None,
+        error="EOF marker missing in PDF",
+    )
+
+    batch_res = BatchValidationResult(
+        total_statements=2,
+        successful_count=1,
+        failed_count=1,
+        cumulative_withdrawals=Decimal("0.00"),
+        cumulative_deposits=Decimal("0.00"),
+        total_discrepancies=0,
+        is_valid=False,
+        statements=[stmt_valid, stmt_damaged],
+    )
+
+    async def mock_batch(*args: object, **kwargs: object) -> BatchValidationResult:
+        return batch_res
+
+    monkeypatch.setattr("bank_statement.cli.parse_batch_statements", mock_batch)
+
+    exit_code = main([str(f1), str(f2)])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "BATCH STATEMENT SUMMARY" in captured.out
+    assert "FAILED / DISCREPANCIES DETECTED" in captured.out
+    assert "FAILED STATEMENTS:" in captured.out
+    assert "damaged.pdf: EOF marker missing in PDF" in captured.out
+
 

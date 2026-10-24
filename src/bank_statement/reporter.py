@@ -170,3 +170,97 @@ def format_cli_summary(result: ValidationResult) -> str:
         lines.append("-" * 95)
 
     return "\n".join(lines)
+
+
+def format_batch_cli_summary(batch_result: BatchValidationResult) -> str:
+    """Generate a formatted human-readable CLI summary and diagnostic report for batch processing.
+
+    Args:
+        batch_result: BatchValidationResult instance produced by the batch orchestrator.
+
+    Returns:
+        Formatted summary string with batch overview, per-statement table, and targeted diagnostics.
+    """
+    status_text = (
+        "VERIFIED (All statements passed with zero discrepancies)"
+        if batch_result.is_valid
+        else "FAILED / DISCREPANCIES DETECTED"
+    )
+
+    lines = [
+        "=" * 85,
+        "                         BATCH STATEMENT SUMMARY",
+        "=" * 85,
+        f"Total Statements:        {batch_result.total_statements} (Passed: {batch_result.successful_count}, Failed: {batch_result.failed_count})",
+        f"Cumulative Withdrawals:  INR {batch_result.cumulative_withdrawals:,.2f}",
+        f"Cumulative Deposits:     INR {batch_result.cumulative_deposits:,.2f}",
+        f"Total Discrepancies:     {batch_result.total_discrepancies}",
+        f"Validation Status:       {status_text}",
+        "=" * 85,
+        "",
+        f"{'File':<25} | {'Txs':<5} | {'Status':<14} | {'Discrepancies':<13} | {'Withdrawals (INR)':>17} | {'Deposits (INR)':>16}",
+        "-" * 105,
+    ]
+
+    for stmt in batch_result.statements:
+        filename = stmt.pdf_path.name
+        if len(filename) > 25:
+            filename = filename[:22] + "..."
+        if stmt.status == "success" and stmt.result is not None:
+            tx_count = str(len(stmt.result.transactions))
+            discrepancy_count = str(len(stmt.result.discrepancies))
+            stmt_status = "VERIFIED" if stmt.result.is_valid else "DISCREPANCIES"
+            withdrawals = f"{stmt.result.total_withdrawals:,.2f}"
+            deposits = f"{stmt.result.total_deposits:,.2f}"
+        else:
+            tx_count = "-"
+            discrepancy_count = "-"
+            stmt_status = "FAILED"
+            withdrawals = "-"
+            deposits = "-"
+
+        lines.append(
+            f"{filename:<25} | {tx_count:<5} | {stmt_status:<14} | {discrepancy_count:<13} | {withdrawals:>17} | {deposits:>16}"
+        )
+
+    lines.append("-" * 105)
+
+    # Render targeted discrepancy diagnostics for statements with mismatches
+    for stmt in batch_result.statements:
+        if stmt.status == "success" and stmt.result is not None and stmt.result.discrepancies:
+            lines.append("")
+            lines.append(f"DISCREPANCY DIAGNOSTICS: {stmt.pdf_path.name}")
+            lines.append("-" * 95)
+            lines.append(
+                f"{'Date':<12} | {'Narration':<35} | {'Stated Bal':<12} | {'Expected Bal':<12} | {'Delta':<10}"
+            )
+            lines.append("-" * 95)
+
+            for tx in stmt.result.discrepancies:
+                if tx.discrepancy is None:
+                    continue
+                date_str = tx.date
+                narration_str = (tx.narration[:32] + "...") if len(tx.narration) > 35 else tx.narration
+                stated_bal = f"{tx.discrepancy.stated_balance:.2f}"
+                expected_bal = f"{tx.discrepancy.expected_balance:.2f}"
+                delta_val = tx.discrepancy.delta
+                delta_str = f"+{delta_val:.2f}" if delta_val > 0 else f"{delta_val:.2f}"
+
+                lines.append(
+                    f"{date_str:<12} | {narration_str:<35} | {stated_bal:>12} | {expected_bal:>12} | {delta_str:>10}"
+                )
+
+            lines.append("-" * 95)
+
+    # Render failed statements callouts if any occurred
+    failed_statements = [s for s in batch_result.statements if s.status == "failed"]
+    if failed_statements:
+        lines.append("")
+        lines.append("FAILED STATEMENTS:")
+        lines.append("-" * 95)
+        for s in failed_statements:
+            lines.append(f"• {s.pdf_path.name}: {s.error or 'Unknown error'}")
+        lines.append("-" * 95)
+
+    return "\n".join(lines)
+
