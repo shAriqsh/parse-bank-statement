@@ -313,3 +313,33 @@ async def test_parse_batch_statements_forwards_parameters() -> None:
         assert call["max_retries"] == 2
         assert call["retry_base_delay"] == 0.25
         assert call["custom_flag"] is True
+
+
+@pytest.mark.anyio
+async def test_parse_statement_forwards_progress_callback() -> None:
+    progress_updates: list[tuple[str, float | None]] = []
+
+    def mock_progress(phase: str, pct: float | None = None) -> None:
+        progress_updates.append((phase, pct))
+
+    async def fake_extractor(path: str | Path, **kwargs: Any) -> list[Transaction]:
+        cb = kwargs.get("progress_callback")
+        if cb:
+            cb("Processing page 1", 0.5)
+            cb("Done", 1.0)
+        return [
+            Transaction(
+                date="01-01-2024",
+                narration="TEST",
+                withdrawal=Decimal("0.00"),
+                deposit=Decimal("100.00"),
+                running_balance=Decimal("100.00"),
+            )
+        ]
+
+    result = await parse_statement("test.pdf", extractor=fake_extractor, progress_callback=mock_progress)
+    assert result.is_valid is True
+    assert len(progress_updates) == 2
+    assert progress_updates[0] == ("Processing page 1", 0.5)
+    assert progress_updates[1] == ("Done", 1.0)
+

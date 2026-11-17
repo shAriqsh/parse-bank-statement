@@ -404,6 +404,47 @@ async def test_extract_statement_transactions_end_to_end_rasterization_with_real
     assert txs[1].deposit == Decimal("200.00")
 
 
+@pytest.mark.anyio
+async def test_extract_statement_transactions_invokes_progress_callback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    updates: list[tuple[str, float | None]] = []
+
+    def mock_cb(phase: str, pct: float | None = None) -> None:
+        updates.append((phase, pct))
+
+    monkeypatch.setattr(
+        "bank_statement.extractor._rasterize_pdf_pages",
+        lambda *args, **kwargs: [b"page1", b"page2"],
+    )
+
+    def mock_extract_page(img_bytes: bytes, client: Any = None) -> list[Transaction]:
+        return [
+            Transaction(
+                date="01-01-2024",
+                narration=f"TX {img_bytes.decode()}",
+                withdrawal=Decimal("0.00"),
+                deposit=Decimal("100.00"),
+                running_balance=Decimal("100.00"),
+            )
+        ]
+
+    monkeypatch.setattr("bank_statement.extractor.extract_page_transactions", mock_extract_page)
+
+    txs = await extract_statement_transactions(
+        "dummy.pdf",
+        progress_callback=mock_cb,
+    )
+
+    assert len(txs) == 2
+    # Verify phases reported: rasterizing, extracting page 1 & 2, and complete
+    phases = [u[0] for u in updates]
+    assert any("Rasterizing" in p for p in phases)
+    assert any("Extracting page" in p for p in phases)
+    assert any("complete" in p.lower() for p in phases)
+
+
+
 
 
 

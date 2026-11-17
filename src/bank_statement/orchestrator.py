@@ -21,6 +21,7 @@ async def parse_statement(
     max_retries: int = 3,
     retry_base_delay: float = 1.0,
     extractor: StatementExtractor | None = None,
+    progress_callback: Callable[[str, float | None], None] | None = None,
     **kwargs: Any,
 ) -> ValidationResult:
     """Orchestrate asynchronous multimodal extraction and mathematical balance verification.
@@ -32,6 +33,7 @@ async def parse_statement(
         max_retries: Maximum retries on transient errors (default: 3).
         retry_base_delay: Initial backoff delay in seconds (default: 1.0).
         extractor: Optional statement extraction adapter callable for dependency injection.
+        progress_callback: Optional progress callback hook.
         **kwargs: Additional parameters forwarded to the extraction adapter.
 
     Returns:
@@ -39,19 +41,23 @@ async def parse_statement(
         aggregate withdrawal/deposit totals, and any flagged discrepancies.
     """
     extract_fn = extractor or extract_statement_transactions
+    call_kwargs: dict[str, Any] = {
+        "client": client,
+        "max_concurrency": max_concurrency,
+        "max_retries": max_retries,
+        "retry_base_delay": retry_base_delay,
+        **kwargs,
+    }
+    if progress_callback is not None:
+        call_kwargs["progress_callback"] = progress_callback
+
     try:
-        transactions = await extract_fn(
-            pdf_path,
-            client=client,
-            max_concurrency=max_concurrency,
-            max_retries=max_retries,
-            retry_base_delay=retry_base_delay,
-            **kwargs,
-        )
+        transactions = await extract_fn(pdf_path, **call_kwargs)
     except TypeError:
         transactions = await extract_fn(pdf_path)
 
     return validate_balance(transactions)
+
 
 
 async def parse_batch_statements(

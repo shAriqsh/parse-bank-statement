@@ -1,5 +1,7 @@
 import asyncio
+from collections.abc import Callable
 from decimal import Decimal
+
 import io
 import os
 from pathlib import Path
@@ -180,6 +182,7 @@ async def extract_statement_transactions(
     retry_base_delay: float = 1.0,
     resolution: int = 150,
     max_pages: int | None = None,
+    progress_callback: Callable[[str, float | None], None] | None = None,
 ) -> list[Transaction]:
     """Extract transactions from all pages of a PDF statement with concurrent execution and retry handling.
 
@@ -191,15 +194,21 @@ async def extract_statement_transactions(
         retry_base_delay: Base delay in seconds for exponential backoff.
         resolution: DPI resolution for PDF page rasterization.
         max_pages: Optional maximum number of pages to process.
+        progress_callback: Optional callback reporting current phase and progress percentage.
 
     Returns:
         Chronologically sorted list of domain Transaction instances across all pages.
     """
+    if progress_callback:
+        progress_callback("Rasterizing pages...", 0.0)
+
     loop = asyncio.get_running_loop()
     page_buffers = await loop.run_in_executor(
         None, _rasterize_pdf_pages, pdf_path, resolution, max_pages
     )
 
+    total_pages = len(page_buffers)
+    completed_pages = 0
     semaphore = asyncio.Semaphore(max_concurrency)
 
     async def worker(page_idx: int, img_bytes: bytes) -> tuple[int, list[Transaction]]:
@@ -209,6 +218,13 @@ async def extract_statement_transactions(
                     txs = await loop.run_in_executor(
                         None, extract_page_transactions, img_bytes, client
                     )
+                    nonlocal completed_pages
+                    completed_pages += 1
+                    if progress_callback and total_pages > 0:
+                        progress_callback(
+                            f"Extracting page {completed_pages} of {total_pages}...",
+                            completed_pages / total_pages,
+                        )
                     return page_idx, txs
             except Exception as exc:
                 if attempt < max_retries and is_rate_limit_error(exc):
@@ -226,5 +242,9 @@ async def extract_statement_transactions(
     for _, page_txs in sorted_results:
         all_transactions.extend(page_txs)
 
+    if progress_callback:
+        progress_callback("Extraction complete", 1.0)
+
     return all_transactions
+
 

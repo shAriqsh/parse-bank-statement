@@ -744,3 +744,34 @@ def test_main_batch_with_failed_statement_prints_error_and_exits_1(
     assert "damaged.pdf: EOF marker missing in PDF" in captured.out
 
 
+def test_main_ui_subcommand_invokes_ui_launcher(monkeypatch: pytest.MonkeyPatch) -> None:
+    launcher_called: dict[str, Any] = {}
+
+    def mock_launch_ui(port: int = 8501, host: str = "localhost") -> int:
+        launcher_called["port"] = port
+        launcher_called["host"] = host
+        return 0
+
+    monkeypatch.setattr("bank_statement.cli.launch_ui", mock_launch_ui)
+
+    exit_code = main(["ui"])
+    assert exit_code == 0
+    assert launcher_called == {"port": 8501, "host": "localhost"}
+
+
+def test_main_ui_subcommand_with_custom_port_and_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    launcher_called: dict[str, Any] = {}
+
+    def mock_launch_ui(port: int = 8501, host: str = "localhost") -> int:
+        launcher_called["port"] = port
+        launcher_called["host"] = host
+        return 0
+
+    monkeypatch.setattr("bank_statement.cli.launch_ui", mock_launch_ui)
+
+    exit_code = main(["ui", "--port", "8505", "--host", "127.0.0.1"])
+    assert exit_code == 0
+    assert launcher_called == {"port": 8505, "host": "127.0.0.1"}
+
+
+

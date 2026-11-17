@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 from pathlib import Path
+import sys
 from typing import Sequence
 from bank_statement.config import get_gemini_client
 from bank_statement.orchestrator import parse_batch_statements, parse_statement
@@ -10,6 +11,8 @@ from bank_statement.reporter import (
     format_batch_cli_summary,
     format_cli_summary,
 )
+from bank_statement.ui.runner import launch_ui
+
 
 
 def resolve_pdf_paths(inputs: Sequence[str | Path]) -> list[Path]:
@@ -39,11 +42,33 @@ def resolve_pdf_paths(inputs: Sequence[str | Path]) -> list[Path]:
     return resolved_paths
 
 
+def build_ui_parser() -> argparse.ArgumentParser:
+    """Build the command-line argument parser for the 'ui' subcommand."""
+    parser = argparse.ArgumentParser(
+        description="Launch Streamlit Bank Statement Audit Inspector"
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8501,
+        help="Port to run the Streamlit UI on (default: 8501)",
+    )
+    parser.add_argument(
+        "--host",
+        default="localhost",
+        help="Host address to bind the Streamlit UI to (default: localhost)",
+    )
+    return parser
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     """Build the command-line argument parser."""
     parser = argparse.ArgumentParser(
-        description="Multimodal Bank Statement Parser & Mathematical Balance Validator"
+        description="Multimodal Bank Statement Parser & Mathematical Balance Validator",
+        epilog="Subcommands:\n  ui    Launch the Streamlit web audit inspector (see 'ui --help')",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+
     parser.add_argument(
         "pdf_paths",
         nargs="*",
@@ -69,6 +94,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Maximum concurrent extraction workers (default: 5)",
     )
     return parser
+
 
 
 async def run_pipeline(
@@ -112,6 +138,12 @@ async def run_pipeline(
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Main CLI entry point."""
+    args_list = list(argv) if argv is not None else sys.argv[1:]
+    if args_list and args_list[0] == "ui":
+        ui_parser = build_ui_parser()
+        ui_args = ui_parser.parse_args(args_list[1:])
+        return launch_ui(port=ui_args.port, host=ui_args.host)
+
     parser = build_arg_parser()
     args = parser.parse_args(argv)
 
@@ -125,3 +157,4 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_dir=args.output_dir,
         )
     )
+
