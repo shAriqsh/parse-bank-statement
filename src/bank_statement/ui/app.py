@@ -7,7 +7,7 @@ from typing import Any, TypeVar
 import streamlit as st
 from bank_statement.config import get_gemini_client
 from bank_statement.orchestrator import parse_statement
-from bank_statement.ui.components import render_summary_metrics, render_transaction_table
+from bank_statement.ui.components import render_discrepancy_diagnostics, render_summary_metrics, render_transaction_table
 
 T = TypeVar("T")
 
@@ -88,6 +88,8 @@ def main() -> None:
 
     st.subheader(f"Statement Audit Summary: {filename}")
     render_summary_metrics(result)
+
+    render_discrepancy_diagnostics(result)
 
     st.subheader("Transaction Ledger")
     render_transaction_table(result.transactions)

@@ -5,9 +5,17 @@ from unittest.mock import MagicMock
 import pytest
 from streamlit.testing.v1 import AppTest
 from bank_statement.models import Discrepancy, Transaction, ValidationResult
+from bank_statement.ui.components import (
+    HIGHLIGHT_ROW_STYLE,
+    build_styled_transaction_table,
+    render_discrepancy_diagnostics,
+    render_summary_metrics,
+    render_transaction_table,
+)
 
 
 APP_PATH = str(Path(__file__).resolve().parent.parent / "src" / "bank_statement" / "ui" / "app.py")
+DEFAULT_TIMEOUT = 10
 
 
 @pytest.fixture
@@ -54,6 +62,7 @@ def sample_discrepancy_result() -> ValidationResult:
             delta=Decimal("-500.00"),
         ),
     )
+
     return ValidationResult(
         transactions=[tx_bad],
         total_withdrawals=Decimal("500.00"),
@@ -63,8 +72,12 @@ def sample_discrepancy_result() -> ValidationResult:
     )
 
 
+# ===========================================================================
+# Tier 2: End-to-End App Integration Tests (via AppTest.from_file)
+# ===========================================================================
+
 def test_ui_initial_landing_prompts_for_upload() -> None:
-    at = AppTest.from_file(APP_PATH, default_timeout=15).run()
+    at = AppTest.from_file(APP_PATH, default_timeout=DEFAULT_TIMEOUT).run()
     assert not at.exception
     assert len(at.title) >= 1
     assert "Bank Statement" in at.title[0].value
@@ -92,10 +105,10 @@ def test_ui_upload_statement_renders_metrics_and_ledger(
             cb("Processing pages...", 0.5)
         return sample_valid_result
 
-    monkeypatch.setattr("bank_statement.orchestrator.parse_statement", mock_parse_statement)
     monkeypatch.setattr("bank_statement.ui.app.parse_statement", mock_parse_statement)
+    monkeypatch.setattr("bank_statement.orchestrator.parse_statement", mock_parse_statement)
 
-    at = AppTest.from_file(APP_PATH, default_timeout=15).run()
+    at = AppTest.from_file(APP_PATH, default_timeout=DEFAULT_TIMEOUT).run()
     assert len(at.file_uploader) == 1
 
     # Upload single statement PDF
@@ -115,10 +128,10 @@ def test_ui_upload_statement_renders_metrics_and_ledger(
     assert any("transaction" in l.lower() for l in labels)
     assert any("valid" in l.lower() or "integrity" in l.lower() or "status" in l.lower() for l in labels)
 
-    assert any("2,000.00" in str(v) for v in values)
-    assert any("10,000.00" in str(v) for v in values)
-    assert any("2" == str(v).strip() for v in values)
-    assert any("valid" in str(v).lower() for v in values)
+    assert any("2,000.00" in v for v in values)
+    assert any("10,000.00" in v for v in values)
+    assert any("2" == v for v in values)
+    assert any("valid" in v.lower() for v in values)
 
     # Verify chronological transaction dataframe
     assert len(at.dataframe) >= 1
@@ -139,10 +152,10 @@ def test_ui_session_state_caching_prevents_reextraction(
         extraction_count += 1
         return sample_valid_result
 
-    monkeypatch.setattr("bank_statement.orchestrator.parse_statement", mock_parse)
     monkeypatch.setattr("bank_statement.ui.app.parse_statement", mock_parse)
+    monkeypatch.setattr("bank_statement.orchestrator.parse_statement", mock_parse)
 
-    at = AppTest.from_file(APP_PATH, default_timeout=15).run()
+    at = AppTest.from_file(APP_PATH, default_timeout=DEFAULT_TIMEOUT).run()
     at.file_uploader[0].upload("cached_statement.pdf", b"%PDF-1.4 dummy", "application/pdf").run()
     assert not at.exception
     assert extraction_count == 1
@@ -156,18 +169,50 @@ def test_ui_session_state_caching_prevents_reextraction(
     assert len(at.metric) >= 4
 
 
-def test_ui_upload_statement_with_discrepancy(
+def test_ui_upload_statement_with_discrepancy_renders_alert_card_and_highlighted_table(
     monkeypatch: pytest.MonkeyPatch,
+    multi_tx_discrepancy_result: ValidationResult,
+) -> None:
+    """Full-app headless integration test: uploading statement with discrepancies renders alert and flags rows."""
+    async def mock_parse_statement(path: str | Path, **kwargs: Any) -> ValidationResult:
+        return multi_tx_discrepancy_result
+
+    monkeypatch.setattr("bank_statement.ui.app.parse_statement", mock_parse_statement)
+    monkeypatch.setattr("bank_statement.orchestrator.parse_statement", mock_parse_statement)
+
+    at = AppTest.from_file(APP_PATH, default_timeout=DEFAULT_TIMEOUT).run()
+    at.file_uploader[0].upload("discrepant_statement.pdf", b"%PDF-1.4 dummy", "application/pdf").run()
+    assert not at.exception
+
+    # Prominent Discrepancy Alert card is displayed with variance details
+    all_text = _collect_rendered_text(at)
+    assert "Discrepancy Alert" in all_text
+    assert "02-01-2024" in all_text
+    assert "9,500.00" in all_text
+    assert "9,000.00" in all_text
+    assert "500.00" in all_text
+    assert "re-anchor" in all_text.lower()
+
+    # Ledger dataframe renders all transactions
+    assert len(at.dataframe) >= 1
+    df = at.dataframe[0].value
+    assert len(df) == 3
+    assert "UTILITY BILL" in df["Narration"].values
+
+
+# ===========================================================================
+# Tier 1: Component Unit Tests (Fast & Isolated via AppTest.from_function)
+# ===========================================================================
+
+def test_ui_upload_statement_with_discrepancy_metric(
     sample_discrepancy_result: ValidationResult,
 ) -> None:
-    async def mock_parse(path: str | Path, **kwargs: Any) -> ValidationResult:
-        return sample_discrepancy_result
-
-    monkeypatch.setattr("bank_statement.orchestrator.parse_statement", mock_parse)
-    monkeypatch.setattr("bank_statement.ui.app.parse_statement", mock_parse)
-
-    at = AppTest.from_file(APP_PATH, default_timeout=15).run()
-    at.file_uploader[0].upload("discrepant.pdf", b"%PDF-1.4 dummy", "application/pdf").run()
+    """Verification status metric reflects discrepancy."""
+    at = AppTest.from_function(
+        render_summary_metrics,
+        args=(sample_discrepancy_result,),
+        default_timeout=DEFAULT_TIMEOUT,
+    ).run()
     assert not at.exception
 
     labels = [m.label for m in at.metric]
@@ -175,4 +220,162 @@ def test_ui_upload_statement_with_discrepancy(
 
     # Verification status metric reflects discrepancy
     status_values = [v for l, v in zip(labels, values) if "valid" in l.lower() or "integrity" in l.lower() or "status" in l.lower()]
-    assert any("discrepanc" in str(v).lower() or "flagged" in str(v).lower() or "invalid" in str(v).lower() for v in status_values)
+    assert any("discrepanc" in v.lower() or "flagged" in v.lower() or "invalid" in v.lower() for v in status_values)
+
+
+@pytest.fixture
+def multi_tx_discrepancy_result() -> ValidationResult:
+    """Result with a mix of clean and discrepant transactions for row highlighting tests."""
+    tx_clean = Transaction(
+        date="01-01-2024",
+        narration="SALARY CREDIT",
+        chq_ref_no="CR123",
+        withdrawal=Decimal("0.00"),
+        deposit=Decimal("10000.00"),
+        running_balance=Decimal("10000.00"),
+    )
+    tx_bad = Transaction(
+        date="02-01-2024",
+        narration="UTILITY BILL",
+        chq_ref_no="BILL789",
+        withdrawal=Decimal("500.00"),
+        deposit=Decimal("0.00"),
+        running_balance=Decimal("9000.00"),  # Expected: 9500.00
+        discrepancy=Discrepancy(
+            expected_balance=Decimal("9500.00"),
+            stated_balance=Decimal("9000.00"),
+            delta=Decimal("-500.00"),
+        ),
+    )
+    tx_after = Transaction(
+        date="03-01-2024",
+        narration="GROCERIES",
+        chq_ref_no=None,
+        withdrawal=Decimal("200.00"),
+        deposit=Decimal("0.00"),
+        running_balance=Decimal("8800.00"),
+    )
+    return ValidationResult(
+        transactions=[tx_clean, tx_bad, tx_after],
+        total_withdrawals=Decimal("700.00"),
+        total_deposits=Decimal("10000.00"),
+        discrepancies=[tx_bad],
+        is_valid=False,
+    )
+
+
+def test_ui_discrepancy_alert_card_rendered(
+    multi_tx_discrepancy_result: ValidationResult,
+) -> None:
+    """Prominent Discrepancy Alert card shows mismatch details above the ledger."""
+    at = AppTest.from_function(
+        render_discrepancy_diagnostics,
+        args=(multi_tx_discrepancy_result,),
+        default_timeout=DEFAULT_TIMEOUT,
+    ).run()
+    assert not at.exception
+
+    # Find warning/error elements that contain discrepancy alert details
+    all_text = _collect_rendered_text(at)
+
+    # Must contain the date and variance details of the mismatch
+    assert "02-01-2024" in all_text, "Alert card must show the discrepancy transaction date"
+    assert "9,500.00" in all_text, "Alert card must show the expected balance"
+    assert "9,000.00" in all_text, "Alert card must show the stated running balance"
+    assert "500.00" in all_text, "Alert card must show the delta"
+
+
+def test_ui_discrepancy_alert_mentions_reanchoring(
+    multi_tx_discrepancy_result: ValidationResult,
+) -> None:
+    """Alert explicitly notes that sequential balance checking re-anchored."""
+    at = AppTest.from_function(
+        render_discrepancy_diagnostics,
+        args=(multi_tx_discrepancy_result,),
+        default_timeout=DEFAULT_TIMEOUT,
+    ).run()
+    assert not at.exception
+
+    all_text = _collect_rendered_text(at)
+    assert "re-anchor" in all_text.lower(), (
+        "Discrepancy alert must explain re-anchoring to stated balance"
+    )
+
+
+def test_ui_discrepancy_rows_highlighted_in_table(
+    multi_tx_discrepancy_result: ValidationResult,
+) -> None:
+    """Transaction rows with discrepancies are visually highlighted with distinct styling."""
+    txs = multi_tx_discrepancy_result.transactions
+
+    # 1. Verify Styler logic applies highlight style to row 1 (UTILITY BILL) and not row 0 or 2
+    styled = build_styled_transaction_table(txs)
+    html_output = styled.to_html()
+
+    assert "#fee2e2" in html_output, "Highlight background color must be present in styled table"
+    assert "#991b1b" in html_output, "Highlight text color must be present in styled table"
+    assert "UTILITY BILL" in html_output
+
+    # 2. Verify headless Streamlit component renders cleanly without error
+    at = AppTest.from_function(
+        render_transaction_table,
+        args=(txs,),
+        default_timeout=DEFAULT_TIMEOUT,
+    ).run()
+    assert not at.exception
+    assert len(at.dataframe) >= 1
+    df = at.dataframe[0].value
+    assert len(df) == 3
+    assert list(df["Narration"].values) == ["SALARY CREDIT", "UTILITY BILL", "GROCERIES"]
+
+
+def test_ui_zero_discrepancies_shows_confirmation_badge(
+    sample_valid_result: ValidationResult,
+) -> None:
+    """Statements with zero discrepancies render a visual confirmation badge."""
+    at = AppTest.from_function(
+        render_discrepancy_diagnostics,
+        args=(sample_valid_result,),
+        default_timeout=DEFAULT_TIMEOUT,
+    ).run()
+    assert not at.exception
+
+    all_text = _collect_rendered_text(at)
+    # Should contain a success confirmation (not a discrepancy alert)
+    assert "integrity" in all_text.lower() or "verified" in all_text.lower() or "✅" in all_text, (
+        "Zero-discrepancy statement must display a confirmation badge"
+    )
+    assert "discrepancy alert" not in all_text.lower(), (
+        "No discrepancy alert should appear for clean statements"
+    )
+
+    # Edge case: is_valid=False but 0 discrepancies still renders zero-discrepancy badge
+    empty_discrepancy_result = ValidationResult(
+        transactions=[],
+        total_withdrawals=Decimal("0.00"),
+        total_deposits=Decimal("0.00"),
+        discrepancies=[],
+        is_valid=False,
+    )
+    at_empty = AppTest.from_function(
+        render_discrepancy_diagnostics,
+        args=(empty_discrepancy_result,),
+        default_timeout=DEFAULT_TIMEOUT,
+    ).run()
+    assert not at_empty.exception
+    all_text_empty = _collect_rendered_text(at_empty)
+    assert "integrity" in all_text_empty.lower() or "verified" in all_text_empty.lower()
+
+
+# ---------------------------------------------------------------------------
+# Helper
+# ---------------------------------------------------------------------------
+
+def _collect_rendered_text(at: AppTest) -> str:
+    """Gather all visible text from an AppTest run for content assertions."""
+    parts: list[str] = []
+    for attr in ("title", "header", "subheader", "caption", "text", "markdown",
+                 "info", "success", "warning", "error"):
+        for el in getattr(at, attr, []):
+            parts.append(str(getattr(el, "value", el)))
+    return "\n".join(parts)
