@@ -6,8 +6,12 @@ import tempfile
 from typing import Any, TypeVar
 import streamlit as st
 from bank_statement.config import get_gemini_client
-from bank_statement.orchestrator import parse_statement
-from bank_statement.ui.components import render_discrepancy_diagnostics, render_summary_metrics, render_transaction_table
+from bank_statement.orchestrator import parse_batch_statements, parse_statement
+from bank_statement.ui.components import (
+    render_batch_summary_banner,
+    render_batch_tabs,
+    render_statement_view,
+)
 
 T = TypeVar("T")
 
@@ -32,67 +36,105 @@ def main() -> None:
     st.title("🏦 Bank Statement Audit Inspector")
     st.caption("Multimodal verification and mathematical balance audit inspector")
 
-    uploaded_file = st.file_uploader(
-        "Upload Bank Statement PDF",
+    uploaded_files = st.file_uploader(
+        "Upload Bank Statement PDF(s)",
         type=["pdf"],
-        accept_multiple_files=False,
-        help="Drag and drop a bank statement PDF for automated multimodal audit inspection",
+        accept_multiple_files=True,
+        help="Drag and drop bank statement PDFs for automated multimodal audit inspection",
     )
 
-    if uploaded_file is None:
-        st.info("Please drag and drop a bank statement PDF to begin audit inspection.")
+    if not uploaded_files:
+        st.info("Please drag and drop bank statement PDFs to begin audit inspection.")
         return
 
-    file_signature = f"{uploaded_file.name}_{uploaded_file.size}"
-    cached_signature = st.session_state.get("cached_file_signature")
+    files_signature = ";".join(sorted(f"{f.name}_{f.size}" for f in uploaded_files))
+    cached_signature = st.session_state.get("cached_files_signature") or st.session_state.get("cached_file_signature")
 
-    if cached_signature != file_signature or "statement_result" not in st.session_state:
-        temp_dir = tempfile.mkdtemp()
-        temp_pdf_path = Path(temp_dir) / uploaded_file.name
-        try:
-            temp_pdf_path.write_bytes(uploaded_file.getvalue())
+    client = None
+    try:
+        client = get_gemini_client()
+    except Exception:
+        pass
 
-            progress_bar = st.progress(0.0, text="Initializing multimodal extraction...")
-
-            def progress_callback(phase: str, pct: float | None = None) -> None:
-                p = pct if pct is not None else 0.0
-                clamped_p = min(max(p, 0.0), 1.0)
-                progress_bar.progress(clamped_p, text=phase)
-
-            client = None
+    if len(uploaded_files) == 1:
+        uploaded_file = uploaded_files[0]
+        if cached_signature != files_signature or "statement_result" not in st.session_state:
+            temp_dir = tempfile.mkdtemp()
+            temp_pdf_path = Path(temp_dir) / uploaded_file.name
             try:
-                client = get_gemini_client()
-            except Exception:
-                pass
+                temp_pdf_path.write_bytes(uploaded_file.getvalue())
 
-            result = run_async(
-                parse_statement(
-                    temp_pdf_path,
-                    client=client,
-                    progress_callback=progress_callback,
+                progress_bar = st.progress(0.0, text="Initializing multimodal extraction...")
+
+                def progress_callback(phase: str, pct: float | None = None) -> None:
+                    p = pct if pct is not None else 0.0
+                    clamped_p = min(max(p, 0.0), 1.0)
+                    progress_bar.progress(clamped_p, text=phase)
+
+                result = run_async(
+                    parse_statement(
+                        temp_pdf_path,
+                        client=client,
+                        progress_callback=progress_callback,
+                    )
                 )
-            )
 
-            st.session_state["cached_file_signature"] = file_signature
-            st.session_state["statement_result"] = result
-            st.session_state["statement_filename"] = uploaded_file.name
-            progress_bar.empty()
-        finally:
-            if temp_pdf_path.exists():
-                temp_pdf_path.unlink()
-            if Path(temp_dir).exists():
-                shutil.rmtree(temp_dir, ignore_errors=True)
+                st.session_state["cached_files_signature"] = files_signature
+                st.session_state["cached_file_signature"] = files_signature
+                st.session_state["statement_result"] = result
+                st.session_state["statement_filename"] = uploaded_file.name
+                progress_bar.empty()
+            finally:
+                if temp_pdf_path.exists():
+                    temp_pdf_path.unlink()
+                if Path(temp_dir).exists():
+                    shutil.rmtree(temp_dir, ignore_errors=True)
 
-    result = st.session_state["statement_result"]
-    filename = st.session_state.get("statement_filename", uploaded_file.name)
+        result = st.session_state["statement_result"]
+        filename = st.session_state.get("statement_filename", uploaded_file.name)
 
-    st.subheader(f"Statement Audit Summary: {filename}")
-    render_summary_metrics(result)
+        render_statement_view(result, filename)
 
-    render_discrepancy_diagnostics(result)
+    else:
+        # Multi-statement batch processing flow
+        if cached_signature != files_signature or "batch_result" not in st.session_state:
+            temp_dir = tempfile.mkdtemp()
+            temp_paths: list[Path] = []
+            try:
+                for uf in uploaded_files:
+                    p = Path(temp_dir) / uf.name
+                    p.write_bytes(uf.getvalue())
+                    temp_paths.append(p)
 
-    st.subheader("Transaction Ledger")
-    render_transaction_table(result.transactions)
+                progress_bar = st.progress(0.0, text="Initializing batch extraction...")
+
+                def batch_progress_callback(phase: str, pct: float | None = None) -> None:
+                    p = pct if pct is not None else 0.0
+                    clamped_p = min(max(p, 0.0), 1.0)
+                    progress_bar.progress(clamped_p, text=phase)
+
+                batch_result = run_async(
+                    parse_batch_statements(
+                        temp_paths,
+                        client=client,
+                        progress_callback=batch_progress_callback,
+                    )
+                )
+
+                st.session_state["cached_files_signature"] = files_signature
+                st.session_state["cached_file_signature"] = files_signature
+                st.session_state["batch_result"] = batch_result
+                progress_bar.empty()
+            finally:
+                for p in temp_paths:
+                    if p.exists():
+                        p.unlink()
+                if Path(temp_dir).exists():
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+
+        batch_result = st.session_state["batch_result"]
+        render_batch_summary_banner(batch_result)
+        render_batch_tabs(batch_result)
 
 
 main()

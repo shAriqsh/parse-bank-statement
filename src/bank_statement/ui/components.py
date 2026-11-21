@@ -1,9 +1,137 @@
 from typing import Any, Sequence
 import pandas as pd  # type: ignore[import-untyped]
 import streamlit as st
-from bank_statement.models import Transaction, ValidationResult
+from bank_statement.models import (
+    BatchValidationResult,
+    StatementResult,
+    Transaction,
+    ValidationResult,
+)
 
 HIGHLIGHT_ROW_STYLE = "background-color: #fee2e2; color: #991b1b; font-weight: bold"
+
+
+def render_batch_summary_banner(batch_result: BatchValidationResult) -> None:
+    """Render high-level portfolio-wide aggregate summary banner and metric cards for a batch."""
+    import streamlit as st
+
+    st.subheader("Batch Audit Summary")
+
+    if batch_result.is_valid:
+        st.success(
+            f"✅ **Batch Verification Succeeded** — All {batch_result.total_statements} statements "
+            "processed successfully with zero mathematical discrepancies."
+        )
+    elif batch_result.failed_count > 0:
+        st.error(
+            f"❌ **Batch Issues Flagged** — {batch_result.failed_count} of {batch_result.total_statements} "
+            f"statements failed extraction, and {batch_result.total_discrepancies} total discrepancies were detected."
+        )
+    else:
+        st.warning(
+            f"⚠️ **Batch Discrepancies Flagged** — {batch_result.total_discrepancies} total discrepancies "
+            f"detected across {batch_result.total_statements} statements."
+        )
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+
+    with col1:
+        st.metric(
+            label="Total Statements",
+            value=str(batch_result.total_statements),
+        )
+
+    with col2:
+        st.metric(
+            label="Success / Failed",
+            value=f"{batch_result.successful_count} / {batch_result.failed_count}",
+            delta=f"{batch_result.failed_count} Failed" if batch_result.failed_count > 0 else "All Succeeded",
+            delta_color="inverse" if batch_result.failed_count > 0 else "normal",
+        )
+
+    with col3:
+        st.metric(
+            label="Cumulative Withdrawals",
+            value=f"INR {batch_result.cumulative_withdrawals:,.2f}",
+        )
+
+    with col4:
+        st.metric(
+            label="Cumulative Deposits",
+            value=f"INR {batch_result.cumulative_deposits:,.2f}",
+        )
+
+    with col5:
+        discrepancy_count = batch_result.total_discrepancies
+        if discrepancy_count == 0:
+            st.metric(
+                label="Total Discrepancies",
+                value="0",
+                delta="Integrity Confirmed",
+            )
+        else:
+            st.metric(
+                label="Total Discrepancies",
+                value=str(discrepancy_count),
+                delta=f"{discrepancy_count} Discrepanc{'ies' if discrepancy_count != 1 else 'y'}",
+                delta_color="inverse",
+            )
+
+
+def get_statement_tab_label(stmt: StatementResult) -> str:
+    """Return a descriptive tab label combining filename and validation status badge."""
+    filename = stmt.pdf_path.name
+    if stmt.status == "failed":
+        return f"❌ {filename} (Failed)"
+    if stmt.result is not None and stmt.result.discrepancies:
+        return f"⚠️ {filename} (Discrepancy)"
+    return f"✅ {filename} (Valid)"
+
+
+def render_statement_view(result: ValidationResult, filename: str) -> None:
+    """Render full audit view for a single validated statement including metrics, alerts, and ledger."""
+    import streamlit as st
+    from bank_statement.ui.components import (
+        render_discrepancy_diagnostics,
+        render_summary_metrics,
+        render_transaction_table,
+    )
+
+    st.subheader(f"Statement Audit Summary: {filename}")
+    render_summary_metrics(result)
+    render_discrepancy_diagnostics(result)
+    st.subheader("Transaction Ledger")
+    render_transaction_table(result.transactions)
+
+
+def render_batch_tabs(batch_result: BatchValidationResult) -> None:
+    """Render dedicated isolated tabs for each statement in a batch."""
+    import streamlit as st
+    from bank_statement.ui.components import get_statement_tab_label, render_statement_view
+
+    if not batch_result.statements:
+        st.info("No statements to display in this batch.")
+        return
+
+    tab_labels = [get_statement_tab_label(s) for s in batch_result.statements]
+    tabs = st.tabs(tab_labels)
+
+    for tab, stmt in zip(tabs, batch_result.statements):
+        with tab:
+            filename = stmt.pdf_path.name
+            if stmt.status == "failed":
+                st.subheader(f"Statement: {filename}")
+                st.error(
+                    f"❌ **Extraction Failed**: {stmt.error or 'An unknown error occurred during statement processing.'}"
+                )
+                st.info(
+                    "ℹ️ **Diagnostics**: Extraction failed for this statement. "
+                    "Other statements in this batch remain unaffected and fully verified."
+                )
+            else:
+                val_result = stmt.result
+                assert val_result is not None
+                render_statement_view(val_result, filename)
 
 
 def render_summary_metrics(result: ValidationResult) -> None:
