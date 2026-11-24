@@ -41,20 +41,20 @@ Built with **Google GenAI**, **Pydantic v2**, **pdfplumber**, and **Streamlit**,
 
 ```mermaid
 flowchart TD
-    A[Bank Statement PDF(s)] --> B[In-Memory Page Rasterization]
-    B --> C[Async Worker Queue / Semaphore]
-    C --> D[Google GenAI Vision Extraction]
-    D --> E[Pydantic Structured Schema Validation]
-    E --> F[Chronological Page Ordering & Merging]
-    F --> G[Deterministic Balance Validator]
-    G --> H{Balance Matches?}
-    H -- Yes --> I[Advance Previous Balance]
-    H -- No --> J[Flag Discrepancy & Re-anchor]
-    I --> K[Aggregate Statement & Batch Metrics]
+    A["Bank Statement PDF(s)"] --> B["In-Memory Page Rasterization"]
+    B --> C["Async Worker Queue / Semaphore"]
+    C --> D["Google GenAI Vision Extraction"]
+    D --> E["Pydantic Structured Schema Validation"]
+    E --> F["Chronological Page Ordering & Merging"]
+    F --> G["Deterministic Balance Validator"]
+    G --> H{"Balance Matches?"}
+    H -- Yes --> I["Advance Previous Balance"]
+    H -- No --> J["Flag Discrepancy & Re-anchor"]
+    I --> K["Aggregate Statement & Batch Metrics"]
     J --> K
-    K --> L[Structured JSON Export]
-    K --> M[CLI Terminal Summary]
-    K --> N[Streamlit Web Audit Inspector]
+    K --> L["Structured JSON Export"]
+    K --> M["CLI Terminal Summary"]
+    K --> N["Streamlit Web Audit Inspector"]
 ```
 
 ---
