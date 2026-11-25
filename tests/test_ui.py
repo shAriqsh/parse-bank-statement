@@ -1,4 +1,5 @@
 from decimal import Decimal
+import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -12,6 +13,8 @@ from bank_statement.ui.components import (
     render_batch_summary_banner,
     render_batch_tabs,
     render_discrepancy_diagnostics,
+    render_json_export_button,
+    render_sidebar_config,
     render_summary_metrics,
     render_transaction_table,
 )
@@ -681,6 +684,189 @@ def test_ui_render_batch_tabs_content_and_isolation(
     assert "statement_corrupted.pdf" in all_text
     assert "Invalid PDF header stream" in all_text
     assert len(at.error) >= 1
+
+
+# ===========================================================================
+# Tier 3: Runtime Configuration Sidebar & Canonical JSON Export Tests
+# ===========================================================================
+
+
+def test_ui_sidebar_api_key_status_ready_and_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("bank_statement.config.get_gemini_client", lambda: object())
+    at_ready = AppTest.from_file(APP_PATH, default_timeout=DEFAULT_TIMEOUT).run()
+    assert not at_ready.exception
+    assert len(at_ready.sidebar.success) == 1
+    assert "ready" in at_ready.sidebar.success[0].value.lower()
+    assert len(at_ready.sidebar.warning) == 0
+
+    def raise_missing() -> None:
+        raise ValueError("GEMINI_API_KEY not set")
+
+    monkeypatch.setattr("bank_statement.config.get_gemini_client", raise_missing)
+    at_missing = AppTest.from_file(APP_PATH, default_timeout=DEFAULT_TIMEOUT).run()
+    assert not at_missing.exception
+    assert len(at_missing.sidebar.warning) == 1
+    assert "not configured" in at_missing.sidebar.warning[0].value.lower()
+
+
+def test_ui_sidebar_default_parameters_and_propagation_single(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_valid_result: ValidationResult,
+) -> None:
+    captured_kwargs: list[dict[str, Any]] = []
+
+    async def mock_parse_statement(path: str | Path, **kwargs: Any) -> ValidationResult:
+        captured_kwargs.append(kwargs)
+        return sample_valid_result
+
+    monkeypatch.setattr("bank_statement.config.get_gemini_client", lambda: object())
+    monkeypatch.setattr("bank_statement.orchestrator.parse_statement", mock_parse_statement)
+
+    at = AppTest.from_file(APP_PATH, default_timeout=DEFAULT_TIMEOUT).run()
+    assert not at.exception
+    assert len(at.sidebar.slider) == 3
+
+    concurrency_slider, retries_slider, delay_slider = at.sidebar.slider
+    assert concurrency_slider.value == 5
+    assert retries_slider.value == 3
+    assert delay_slider.value == pytest.approx(1.0)
+
+    # Adjust sliders before uploading statement
+    concurrency_slider.set_value(12).run()
+    at.sidebar.slider[1].set_value(7).run()
+    at.sidebar.slider[2].set_value(2.5).run()
+
+    at.file_uploader[0].upload("statement.pdf", b"%PDF-1.4 content", "application/pdf").run()
+    assert not at.exception
+    assert len(captured_kwargs) == 1
+    assert captured_kwargs[0]["max_concurrency"] == 12
+    assert captured_kwargs[0]["max_retries"] == 7
+    assert captured_kwargs[0]["retry_base_delay"] == pytest.approx(2.5)
+
+
+def test_ui_sidebar_parameter_propagation_batch(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_clean_batch_result: BatchValidationResult,
+) -> None:
+    captured_kwargs: list[dict[str, Any]] = []
+
+    async def mock_parse_batch(paths: Any, **kwargs: Any) -> BatchValidationResult:
+        captured_kwargs.append(kwargs)
+        return sample_clean_batch_result
+
+    monkeypatch.setattr("bank_statement.config.get_gemini_client", lambda: object())
+    monkeypatch.setattr("bank_statement.orchestrator.parse_batch_statements", mock_parse_batch)
+
+    at = AppTest.from_file(APP_PATH, default_timeout=DEFAULT_TIMEOUT).run()
+    at.sidebar.slider[0].set_value(9).run()
+    at.sidebar.slider[1].set_value(4).run()
+    at.sidebar.slider[2].set_value(1.5).run()
+
+    at.file_uploader[0].upload("s1.pdf", b"%PDF-1.4 one", "application/pdf")
+    at.file_uploader[0].upload("s2.pdf", b"%PDF-1.4 two", "application/pdf").run()
+    assert not at.exception
+    assert len(captured_kwargs) == 1
+    assert captured_kwargs[0]["max_concurrency"] == 9
+    assert captured_kwargs[0]["max_retries"] == 4
+    assert captured_kwargs[0]["retry_base_delay"] == pytest.approx(1.5)
+
+
+def test_ui_single_statement_json_export_payload(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_discrepancy_result: ValidationResult,
+) -> None:
+    captured_downloads: list[dict[str, Any]] = []
+    import streamlit as st
+
+    original_download_button = st.download_button
+
+    def spy_download_button(*args: Any, **kwargs: Any) -> Any:
+        captured_downloads.append({"args": args, "kwargs": kwargs})
+        return original_download_button(*args, **kwargs)
+
+    monkeypatch.setattr(st, "download_button", spy_download_button)
+
+    async def mock_parse_statement(path: str | Path, **kwargs: Any) -> ValidationResult:
+        return sample_discrepancy_result
+
+    monkeypatch.setattr("bank_statement.config.get_gemini_client", lambda: object())
+    monkeypatch.setattr("bank_statement.orchestrator.parse_statement", mock_parse_statement)
+
+    at = AppTest.from_file(APP_PATH, default_timeout=DEFAULT_TIMEOUT).run()
+    at.file_uploader[0].upload("jan_statement.pdf", b"%PDF-1.4 content", "application/pdf").run()
+    assert not at.exception
+
+    assert len(captured_downloads) == 1
+    dl_kwargs = captured_downloads[0]["kwargs"]
+    assert dl_kwargs["file_name"] == "jan_statement_transactions.json"
+    assert dl_kwargs["mime"] == "application/json"
+
+    payload = json.loads(dl_kwargs["data"])
+    assert payload["summary"] == {
+        "total_withdrawals": "500.00",
+        "total_deposits": "0.00",
+        "transaction_count": 1,
+        "discrepancy_count": 1,
+        "is_valid": False,
+    }
+    assert len(payload["transactions"]) == 1
+    assert payload["transactions"][0]["narration"] == "UTILITY BILL"
+    assert payload["transactions"][0]["discrepancy"] == {
+        "expected_balance": "7500.00",
+        "stated_balance": "7000.00",
+        "delta": "-500.00",
+    }
+    assert len(payload["discrepancies"]) == 1
+
+
+def test_ui_batch_json_export_payload(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_mixed_batch_result: BatchValidationResult,
+) -> None:
+    captured_downloads: list[dict[str, Any]] = []
+    import streamlit as st
+
+    original_download_button = st.download_button
+
+    def spy_download_button(*args: Any, **kwargs: Any) -> Any:
+        captured_downloads.append({"args": args, "kwargs": kwargs})
+        return original_download_button(*args, **kwargs)
+
+    monkeypatch.setattr(st, "download_button", spy_download_button)
+
+    async def mock_parse_batch(paths: Any, **kwargs: Any) -> BatchValidationResult:
+        return sample_mixed_batch_result
+
+    monkeypatch.setattr("bank_statement.config.get_gemini_client", lambda: object())
+    monkeypatch.setattr("bank_statement.orchestrator.parse_batch_statements", mock_parse_batch)
+
+    at = AppTest.from_file(APP_PATH, default_timeout=DEFAULT_TIMEOUT).run()
+    at.file_uploader[0].upload("a.pdf", b"%PDF-1.4 a", "application/pdf")
+    at.file_uploader[0].upload("b.pdf", b"%PDF-1.4 b", "application/pdf").run()
+    assert not at.exception
+
+    assert len(captured_downloads) == 1
+    dl_kwargs = captured_downloads[0]["kwargs"]
+    assert dl_kwargs["file_name"] == "batch_audit_report.json"
+    assert dl_kwargs["mime"] == "application/json"
+
+    payload = json.loads(dl_kwargs["data"])
+    assert payload["batch_summary"] == {
+        "total_statements": 3,
+        "successful_count": 2,
+        "failed_count": 1,
+        "cumulative_withdrawals": "2700.00",
+        "cumulative_deposits": "20000.00",
+        "total_discrepancies": 1,
+        "is_valid": False,
+    }
+    assert len(payload["statements"]) == 3
+    assert payload["statements"][0]["status"] == "success"
+    assert payload["statements"][1]["discrepancies"][0]["discrepancy"]["delta"] == "-500.00"
+    assert payload["statements"][2]["status"] == "failed"
+    assert payload["statements"][2]["error"] == "Invalid PDF header stream"
 
 
 # ---------------------------------------------------------------------------

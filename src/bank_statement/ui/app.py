@@ -10,6 +10,8 @@ from bank_statement.orchestrator import parse_batch_statements, parse_statement
 from bank_statement.ui.components import (
     render_batch_summary_banner,
     render_batch_tabs,
+    render_json_export_button,
+    render_sidebar_config,
     render_statement_view,
 )
 
@@ -36,6 +38,14 @@ def main() -> None:
     st.title("🏦 Bank Statement Audit Inspector")
     st.caption("Multimodal verification and mathematical balance audit inspector")
 
+    client = None
+    try:
+        client = get_gemini_client()
+    except Exception:
+        pass
+
+    runtime_config = render_sidebar_config(api_key_ready=client is not None)
+
     uploaded_files = st.file_uploader(
         "Upload Bank Statement PDF(s)",
         type=["pdf"],
@@ -49,12 +59,6 @@ def main() -> None:
 
     files_signature = ";".join(sorted(f"{f.name}_{f.size}" for f in uploaded_files))
     cached_signature = st.session_state.get("cached_files_signature") or st.session_state.get("cached_file_signature")
-
-    client = None
-    try:
-        client = get_gemini_client()
-    except Exception:
-        pass
 
     if len(uploaded_files) == 1:
         uploaded_file = uploaded_files[0]
@@ -75,6 +79,9 @@ def main() -> None:
                     parse_statement(
                         temp_pdf_path,
                         client=client,
+                        max_concurrency=runtime_config.max_concurrency,
+                        max_retries=runtime_config.max_retries,
+                        retry_base_delay=runtime_config.retry_base_delay,
                         progress_callback=progress_callback,
                     )
                 )
@@ -94,6 +101,7 @@ def main() -> None:
         filename = st.session_state.get("statement_filename", uploaded_file.name)
 
         render_statement_view(result, filename)
+        render_json_export_button(result, file_name=f"{Path(filename).stem}_transactions.json")
 
     else:
         # Multi-statement batch processing flow
@@ -117,6 +125,9 @@ def main() -> None:
                     parse_batch_statements(
                         temp_paths,
                         client=client,
+                        max_concurrency=runtime_config.max_concurrency,
+                        max_retries=runtime_config.max_retries,
+                        retry_base_delay=runtime_config.retry_base_delay,
                         progress_callback=batch_progress_callback,
                     )
                 )
@@ -134,6 +145,7 @@ def main() -> None:
 
         batch_result = st.session_state["batch_result"]
         render_batch_summary_banner(batch_result)
+        render_json_export_button(batch_result, file_name="batch_audit_report.json")
         render_batch_tabs(batch_result)
 
 

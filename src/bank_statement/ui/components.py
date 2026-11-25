@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Any, Sequence
 import pandas as pd  # type: ignore[import-untyped]
 import streamlit as st
@@ -7,8 +8,90 @@ from bank_statement.models import (
     Transaction,
     ValidationResult,
 )
+from bank_statement.reporter import (
+    format_batch_result_json,
+    format_validation_result_json,
+)
 
 HIGHLIGHT_ROW_STYLE = "background-color: #fee2e2; color: #991b1b; font-weight: bold"
+
+
+@dataclass(frozen=True)
+class RuntimeConfig:
+    """Runtime extraction pipeline parameters configured via the sidebar."""
+
+    max_concurrency: int = 5
+    max_retries: int = 3
+    retry_base_delay: float = 1.0
+
+
+def render_sidebar_config(api_key_ready: bool) -> RuntimeConfig:
+    """Render collapsible runtime configuration sidebar and return selected parameters."""
+    with st.sidebar:
+        st.header("⚙️ Runtime Configuration")
+
+        st.subheader("Google GenAI API Key")
+        if api_key_ready:
+            st.success("✅ Configured & Ready")
+        else:
+            st.warning("⚠️ Not Configured")
+            st.caption(
+                "Set `GEMINI_API_KEY` or `GOOGLE_API_KEY` in your environment or `.env` file."
+            )
+
+        st.divider()
+        st.subheader("Extraction Pipeline")
+
+        max_concurrency = st.slider(
+            "Max Concurrency",
+            min_value=1,
+            max_value=20,
+            value=5,
+            step=1,
+            help="Maximum concurrent page extraction workers (default: 5)",
+        )
+        max_retries = st.slider(
+            "Max Retries",
+            min_value=0,
+            max_value=10,
+            value=3,
+            step=1,
+            help="Maximum retry attempts on transient API errors (default: 3)",
+        )
+        retry_base_delay = st.slider(
+            "Retry Base Delay (s)",
+            min_value=0.1,
+            max_value=10.0,
+            value=1.0,
+            step=0.1,
+            help="Initial exponential backoff delay in seconds (default: 1.0)",
+        )
+
+    return RuntimeConfig(
+        max_concurrency=int(max_concurrency),
+        max_retries=int(max_retries),
+        retry_base_delay=float(retry_base_delay),
+    )
+
+
+def render_json_export_button(
+    result: ValidationResult | BatchValidationResult,
+    file_name: str,
+) -> None:
+    """Render a one-click download button for canonical structured JSON export."""
+    if isinstance(result, BatchValidationResult):
+        json_payload = format_batch_result_json(result)
+        label = "⬇️ Export Batch JSON Report"
+    else:
+        json_payload = format_validation_result_json(result)
+        label = "⬇️ Export Structured JSON"
+
+    st.download_button(
+        label=label,
+        data=json_payload,
+        file_name=file_name,
+        mime="application/json",
+    )
 
 
 def render_batch_summary_banner(batch_result: BatchValidationResult) -> None:

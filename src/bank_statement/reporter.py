@@ -44,6 +44,12 @@ def _validation_result_to_dict(result: ValidationResult) -> dict[str, Any]:
     }
 
 
+def format_validation_result_json(result: ValidationResult) -> str:
+    """Serialize a ValidationResult to a formatted canonical JSON string."""
+    payload = _validation_result_to_dict(result)
+    return json.dumps(payload, indent=2)
+
+
 def export_transactions_json(
     result: ValidationResult,
     output_path: str | Path,
@@ -56,25 +62,11 @@ def export_transactions_json(
     """
     target = Path(output_path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    payload = _validation_result_to_dict(result)
-    target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    target.write_text(format_validation_result_json(result), encoding="utf-8")
 
 
-def export_batch_json(
-    batch_result: BatchValidationResult,
-    output_path: str | Path,
-    output_dir: str | Path | None = None,
-) -> None:
-    """Export consolidated batch validation results and optional per-statement JSON files.
-
-    Args:
-        batch_result: BatchValidationResult instance produced by the batch orchestrator.
-        output_path: Target path for the consolidated batch JSON report.
-        output_dir: Optional directory to write individual <statement_stem>_transactions.json files.
-    """
-    target = Path(output_path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-
+def _batch_validation_result_to_dict(batch_result: BatchValidationResult) -> dict[str, Any]:
+    """Serialize a BatchValidationResult into a JSON-compatible dictionary."""
     statements_list: list[dict[str, Any]] = []
     for stmt in batch_result.statements:
         if stmt.status == "success" and stmt.result is not None:
@@ -95,7 +87,7 @@ def export_batch_json(
             }
         statements_list.append(stmt_dict)
 
-    payload = {
+    return {
         "batch_summary": {
             "total_statements": batch_result.total_statements,
             "successful_count": batch_result.successful_count,
@@ -108,7 +100,28 @@ def export_batch_json(
         "statements": statements_list,
     }
 
-    target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+def format_batch_result_json(batch_result: BatchValidationResult) -> str:
+    """Serialize a BatchValidationResult to a formatted canonical JSON string."""
+    payload = _batch_validation_result_to_dict(batch_result)
+    return json.dumps(payload, indent=2)
+
+
+def export_batch_json(
+    batch_result: BatchValidationResult,
+    output_path: str | Path,
+    output_dir: str | Path | None = None,
+) -> None:
+    """Export consolidated batch validation results and optional per-statement JSON files.
+
+    Args:
+        batch_result: BatchValidationResult instance produced by the batch orchestrator.
+        output_path: Target path for the consolidated batch JSON report.
+        output_dir: Optional directory to write individual <statement_stem>_transactions.json files.
+    """
+    target = Path(output_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(format_batch_result_json(batch_result), encoding="utf-8")
 
     if output_dir is not None:
         dir_target = Path(output_dir)
