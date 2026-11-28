@@ -10,6 +10,7 @@ from bank_statement.extractor import (
     EXTRACTION_PROMPT,
     ExtractedPage,
     ExtractedTransaction,
+    _rasterize_pdf_pages,
     extract_page_transactions,
     extract_statement_transactions,
 )
@@ -358,11 +359,12 @@ async def test_extract_statement_transactions_unreadable_file_raises_immediately
 @pytest.mark.anyio
 async def test_extract_statement_transactions_end_to_end_rasterization_with_real_pdf() -> None:
     # Use real account.pdf fixture with max_pages=2 to test end-to-end PDF opening & rasterization
+    expected_buffers = _rasterize_pdf_pages("account.pdf", resolution=36, max_pages=2)
     called_pages: list[bytes] = []
 
     def make_response(data: bytes) -> ExtractedPage:
         called_pages.append(data)
-        idx = len(called_pages)
+        idx = expected_buffers.index(data) + 1
         return ExtractedPage(
             transactions=[
                 ExtractedTransaction(
@@ -414,9 +416,12 @@ async def test_extract_statement_transactions_invokes_progress_callback(
     def mock_cb(phase: str, pct: float | None = None) -> None:
         updates.append((phase, pct))
 
+    def mock_rasterize(*args: object, **kwargs: object) -> list[bytes]:
+        return [b"page1", b"page2"]
+
     monkeypatch.setattr(
         "bank_statement.extractor._rasterize_pdf_pages",
-        lambda *args, **kwargs: [b"page1", b"page2"],
+        mock_rasterize,
     )
 
     def mock_extract_page(img_bytes: bytes, client: Any = None) -> list[Transaction]:
