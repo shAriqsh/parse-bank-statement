@@ -1,10 +1,12 @@
+import json
 from collections.abc import Sequence
 from decimal import Decimal
-import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
+
 import pytest
+
 from bank_statement.cli import main, resolve_pdf_paths
 from bank_statement.models import (
     BatchValidationResult,

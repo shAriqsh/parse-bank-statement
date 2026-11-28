@@ -1,7 +1,7 @@
 import json
 from decimal import Decimal
 from pathlib import Path
-import pytest
+
 from bank_statement.models import (
     BatchValidationResult,
     Discrepancy,

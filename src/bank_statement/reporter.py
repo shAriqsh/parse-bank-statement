@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 from typing import Any
+
 from bank_statement.models import (
     BatchValidationResult,
     Transaction,

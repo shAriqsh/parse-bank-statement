@@ -1,4 +1,5 @@
 from decimal import Decimal
+
 import bank_statement.models as models
 from bank_statement.extractor import ExtractedPage, ExtractedTransaction
 from bank_statement.models import Transaction

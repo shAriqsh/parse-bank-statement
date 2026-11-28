@@ -1,16 +1,17 @@
 import asyncio
-from collections.abc import Callable
-from decimal import Decimal
-
 import io
 import os
-from pathlib import Path
 import re
+from collections.abc import Callable
+from decimal import Decimal
+from pathlib import Path
 from typing import Any
+
+import pdfplumber
 from google import genai
 from google.genai import types
-import pdfplumber
 from pydantic import BaseModel, Field
+
 from bank_statement.config import load_gemini_api_key
 from bank_statement.models import Transaction
 

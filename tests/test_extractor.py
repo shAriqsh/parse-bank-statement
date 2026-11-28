@@ -1,10 +1,11 @@
-from decimal import Decimal
 import threading
 import time
+from decimal import Decimal
 from typing import Any
 from unittest.mock import MagicMock
+
 import pytest
-from google.genai import types
+
 from bank_statement.extractor import (
     EXTRACTION_PROMPT,
     ExtractedPage,

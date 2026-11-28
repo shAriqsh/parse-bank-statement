@@ -1,24 +1,27 @@
-from decimal import Decimal
 import json
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+
 import pytest
 from streamlit.testing.v1 import AppTest
-from bank_statement.models import BatchValidationResult, Discrepancy, StatementResult, Transaction, ValidationResult
+
+from bank_statement.models import (
+    BatchValidationResult,
+    Discrepancy,
+    StatementResult,
+    Transaction,
+    ValidationResult,
+)
 from bank_statement.ui.components import (
-    HIGHLIGHT_ROW_STYLE,
     build_styled_transaction_table,
     get_statement_tab_label,
     render_batch_summary_banner,
     render_batch_tabs,
     render_discrepancy_diagnostics,
-    render_json_export_button,
-    render_sidebar_config,
     render_summary_metrics,
     render_transaction_table,
 )
-
 
 APP_PATH = str(Path(__file__).resolve().parent.parent / "src" / "bank_statement" / "ui" / "app.py")
 DEFAULT_TIMEOUT = 10

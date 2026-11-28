@@ -2,7 +2,9 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
+
 import pytest
+
 from bank_statement.extractor import ExtractedPage, ExtractedTransaction
 from bank_statement.models import BatchValidationResult, Transaction, ValidationResult
 from bank_statement.orchestrator import parse_batch_statements, parse_statement

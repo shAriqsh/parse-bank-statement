@@ -1,6 +1,7 @@
-import os
 from pathlib import Path
+
 import pytest
+
 from bank_statement.config import load_gemini_api_key
 
 

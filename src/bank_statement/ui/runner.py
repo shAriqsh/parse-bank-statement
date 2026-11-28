@@ -1,5 +1,5 @@
-import sys
 from pathlib import Path
+
 import streamlit.web.bootstrap as bootstrap
 
 

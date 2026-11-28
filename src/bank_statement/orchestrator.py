@@ -2,6 +2,7 @@ from collections.abc import Awaitable, Callable, Iterable
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+
 from bank_statement.extractor import extract_statement_transactions
 from bank_statement.models import (
     BatchValidationResult,

@@ -1,8 +1,9 @@
 import argparse
 import asyncio
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Sequence
+
 from bank_statement.config import get_gemini_client
 from bank_statement.orchestrator import parse_batch_statements, parse_statement
 from bank_statement.reporter import (
@@ -12,7 +13,6 @@ from bank_statement.reporter import (
     format_cli_summary,
 )
 from bank_statement.ui.runner import launch_ui
-
 
 
 def resolve_pdf_paths(inputs: Sequence[str | Path]) -> list[Path]:

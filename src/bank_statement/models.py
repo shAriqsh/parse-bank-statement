@@ -1,6 +1,7 @@
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal
+
 from pydantic import BaseModel, Field
 
 __all__ = [

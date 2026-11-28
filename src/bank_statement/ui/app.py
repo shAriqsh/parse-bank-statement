@@ -1,10 +1,12 @@
 import asyncio
-from collections.abc import Coroutine
-from pathlib import Path
 import shutil
 import tempfile
+from collections.abc import Coroutine
+from pathlib import Path
 from typing import Any, TypeVar
+
 import streamlit as st
+
 from bank_statement.config import get_gemini_client
 from bank_statement.orchestrator import parse_batch_statements, parse_statement
 from bank_statement.ui.components import (

@@ -1,12 +1,12 @@
 from decimal import Decimal
 from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
 from bank_statement.models import (
     BatchValidationResult,
     StatementResult,
-    Transaction,
     ValidationResult,
 )
 

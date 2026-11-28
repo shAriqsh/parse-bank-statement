@@ -1,7 +1,9 @@
 from dataclasses import dataclass
 from typing import Any, Sequence
+
 import pandas as pd  # type: ignore[import-untyped]
 import streamlit as st
+
 from bank_statement.models import (
     BatchValidationResult,
     StatementResult,
@@ -174,6 +176,7 @@ def get_statement_tab_label(stmt: StatementResult) -> str:
 def render_statement_view(result: ValidationResult, filename: str) -> None:
     """Render full audit view for a single validated statement including metrics, alerts, and ledger."""
     import streamlit as st
+
     from bank_statement.ui.components import (
         render_discrepancy_diagnostics,
         render_summary_metrics,
@@ -190,7 +193,11 @@ def render_statement_view(result: ValidationResult, filename: str) -> None:
 def render_batch_tabs(batch_result: BatchValidationResult) -> None:
     """Render dedicated isolated tabs for each statement in a batch."""
     import streamlit as st
-    from bank_statement.ui.components import get_statement_tab_label, render_statement_view
+
+    from bank_statement.ui.components import (
+        get_statement_tab_label,
+        render_statement_view,
+    )
 
     if not batch_result.statements:
         st.info("No statements to display in this batch.")
@@ -339,6 +346,7 @@ def render_transaction_table(transactions: Sequence[Transaction]) -> None:
     so anomalies immediately stand out during visual inspection.
     """
     import streamlit as st
+
     from bank_statement.ui.components import build_styled_transaction_table
 
     if not transactions:

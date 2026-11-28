@@ -1,4 +1,5 @@
 from decimal import Decimal
+
 from bank_statement.models import Transaction, ValidationResult
 from bank_statement.validator import validate_balance
 
